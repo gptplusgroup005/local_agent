@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import json
 import math
+import os
 import queue
 import re
 import subprocess
@@ -131,7 +132,10 @@ def read_json_file(path: Path, fallback: Any, encoding: str = "utf-8") -> Any:
 
 
 def write_json_file(path: Path, data: Any) -> None:
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    with path.open("w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
 
 
 def load_config() -> dict[str, Any]:
@@ -220,7 +224,9 @@ class TaskStore:
 
     def _read_unlocked(self) -> list[dict[str, Any]]:
         data = read_json_file(self.path, [])
-        return data if isinstance(data, list) else []
+        if not isinstance(data, list):
+            return []
+        return [item for item in data if isinstance(item, dict) and isinstance(item.get("id"), int)]
 
     def _write_unlocked(self, tasks: list[dict[str, Any]]) -> None:
         write_json_file(self.path, tasks)
@@ -236,8 +242,7 @@ class ConversationMemory:
 
     def read(self) -> list[dict[str, str]]:
         with self.lock:
-            data = read_json_file(self.path, [])
-            items = data if isinstance(data, list) else []
+            items = self._read_unlocked()
             return [item for item in items if isinstance(item, dict)][-self.limit :]
 
     def append(self, role: str, content: str) -> None:
@@ -245,14 +250,23 @@ class ConversationMemory:
         if not content:
             return
         with self.lock:
-            data = read_json_file(self.path, [])
-            items = data if isinstance(data, list) else []
+            items = self._read_unlocked()
             items.append({"role": role, "content": content, "created_at": now()})
             self._write_unlocked(items[-self.limit :])
 
     def append_turn(self, prompt: str, response: str) -> None:
-        self.append("user", prompt)
-        self.append("assistant", response)
+        prompt = prompt.strip()
+        response = response.strip()
+        if not prompt and not response:
+            return
+        with self.lock:
+            items = self._read_unlocked()
+            stamp = now()
+            if prompt:
+                items.append({"role": "user", "content": prompt, "created_at": stamp})
+            if response:
+                items.append({"role": "assistant", "content": response, "created_at": stamp})
+            self._write_unlocked(items[-self.limit :])
 
     def write(self, items: list[dict[str, str]]) -> None:
         with self.lock:
@@ -260,6 +274,10 @@ class ConversationMemory:
 
     def _write_unlocked(self, items: list[dict[str, str]]) -> None:
         write_json_file(self.path, items)
+
+    def _read_unlocked(self) -> list[dict[str, str]]:
+        data = read_json_file(self.path, [])
+        return data if isinstance(data, list) else []
 
 
 class ComputerTools:

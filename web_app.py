@@ -9,6 +9,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 from desktop_app import (
     ROOT,
@@ -142,10 +143,14 @@ class LocalAgentWebHandler(BaseHTTPRequestHandler):
             for key in ("model_enabled", "allow_shell"):
                 if key in payload:
                     config[key] = bool(payload[key])
-            if "num_ctx" in payload:
-                config["num_ctx"] = int(payload["num_ctx"])
-            if "temperature" in payload:
-                config["temperature"] = float(payload["temperature"])
+            try:
+                if "num_ctx" in payload:
+                    config["num_ctx"] = int(payload["num_ctx"])
+                if "temperature" in payload:
+                    config["temperature"] = float(payload["temperature"])
+            except (TypeError, ValueError):
+                self.send_json({"error": "Context must be an integer and temperature must be a number."}, HTTPStatus.BAD_REQUEST)
+                return
             save_config(config)
             log_event(f"{now()} saved settings")
             self.send_json({"ok": True})
@@ -175,9 +180,15 @@ class LocalAgentWebHandler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def send_static(self, raw_path: str) -> None:
-        relative = raw_path.lstrip("/")
+        relative = unquote(raw_path.lstrip("/"))
         path = (FRONTEND / relative).resolve()
-        if not str(path).startswith(str(FRONTEND.resolve())) or not path.exists() or not path.is_file():
+        frontend_root = FRONTEND.resolve()
+        try:
+            path.relative_to(frontend_root)
+        except ValueError:
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        if not path.exists() or not path.is_file():
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
