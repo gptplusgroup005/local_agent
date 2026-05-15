@@ -29,6 +29,10 @@ MEMORY_PATH = ROOT / "memory.json"
 TASK_STATUSES = ("queued", "running", "done", "failed")
 PROMPT_PREVIEW_LIMIT = 120
 MEMORY_TURN_LIMIT = 24
+QUEUE_PANE_MIN_HEIGHT = 160
+DETAIL_PANE_MIN_HEIGHT = 120
+QUEUE_SPLIT_INITIAL_RATIO = 0.38
+QUEUE_SPLITTER_HEIGHT = 14
 
 CYBER = {
     "bg": "#01040b",
@@ -1065,6 +1069,23 @@ class HoloPanel(tk.Canvas):
         self.create_line(x2 - cut, y2 - 2, x2 - 2, y2 - cut, fill=self.glow_color, width=1, tags="surface")
         self.tag_lower("surface", self.inner_window)
 
+
+class AutoScrollbar(ttk.Scrollbar):
+    def __init__(self, parent: tk.Widget, **options: Any) -> None:
+        super().__init__(parent, **options)
+        self.visible = True
+
+    def set(self, first: str, last: str) -> None:
+        if float(first) <= 0.0 and float(last) >= 1.0:
+            if self.visible:
+                self.grid_remove()
+                self.visible = False
+        elif not self.visible:
+            self.grid()
+            self.visible = True
+        super().set(first, last)
+
+
 class LocalAgentDesktop(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
@@ -1471,31 +1492,33 @@ class LocalAgentDesktop(tk.Tk):
         self.selection_label = ttk.Label(toolbar, text="0 selected", style="Muted.TLabel")
         self.selection_label.pack(side="left", padx=12)
         ttk.Button(toolbar, text="Clear Selected", command=self.clear_selected).pack(side="left")
+        ttk.Button(toolbar, text="Refresh", command=self.refresh_all).pack(side="right")
+        ttk.Button(toolbar, text="Clear Done", command=self.clear_done).pack(side="right", padx=(0, 12))
 
-        queue_split = tk.PanedWindow(
-            self.queue_tab,
-            orient=tk.VERTICAL,
-            bg=CYBER["line"],
-            bd=0,
-            sashwidth=8,
-            sashrelief="flat",
-            showhandle=True,
-            handlesize=42,
-            opaqueresize=True,
-        )
-        queue_split.grid(row=1, column=0, columnspan=2, sticky="nsew")
+        deck_outer, deck_inner = self.make_glow_frame(self.queue_tab, bg=CYBER["panel"], glow=CYBER["glow_soft"], line=CYBER["line"], depth=2)
+        deck_outer.grid(row=1, column=0, columnspan=2, sticky="nsew")
+        deck_inner.columnconfigure(0, weight=1)
+        deck_inner.rowconfigure(0, weight=1)
+        deck_inner.grid_propagate(False)
 
-        queue_area = tk.Frame(queue_split, bg=CYBER["panel"])
-        queue_area.columnconfigure(0, weight=1)
-        queue_area.rowconfigure(0, weight=1)
+        self.queue_split = tk.Frame(deck_inner, bg=CYBER["panel"])
+        self.queue_split.grid(row=0, column=0, sticky="nsew")
+        self.queue_split.bind("<Configure>", self.clamp_queue_split)
+        self.queue_split.grid_propagate(False)
 
-        tree_outer, tree_inner = self.make_glow_frame(queue_area, bg=CYBER["field"], glow=CYBER["glow_soft"], depth=2)
-        tree_outer.grid(row=0, column=0, sticky="nsew")
-        tree_inner.columnconfigure(0, weight=1)
-        tree_inner.rowconfigure(0, weight=1)
-        self.task_tree = ttk.Treeview(tree_inner, columns=("select", "status", "created", "prompt"), show="headings")
-        tree_y_scroll = ttk.Scrollbar(tree_inner, orient="vertical", command=self.task_tree.yview)
-        tree_x_scroll = ttk.Scrollbar(tree_inner, orient="horizontal", command=self.task_tree.xview)
+        self.queue_area = tk.Frame(self.queue_split, bg=CYBER["panel"])
+        self.queue_area.grid_propagate(False)
+        self.queue_area.columnconfigure(0, weight=1)
+        self.queue_area.rowconfigure(0, weight=1)
+
+        queue_inner = tk.Frame(self.queue_area, bg=CYBER["field"], highlightthickness=1, highlightbackground=CYBER["line_soft"])
+        queue_inner.grid(row=0, column=0, sticky="nsew")
+        queue_inner.grid_propagate(False)
+        queue_inner.columnconfigure(0, weight=1)
+        queue_inner.rowconfigure(0, weight=1)
+        self.task_tree = ttk.Treeview(queue_inner, columns=("select", "status", "created", "prompt"), show="headings", height=1)
+        tree_y_scroll = AutoScrollbar(queue_inner, orient="vertical", command=self.task_tree.yview)
+        tree_x_scroll = AutoScrollbar(queue_inner, orient="horizontal", command=self.task_tree.xview)
         self.task_tree.configure(yscrollcommand=tree_y_scroll.set, xscrollcommand=tree_x_scroll.set)
         self.task_tree.heading("select", text="")
         self.task_tree.heading("status", text="Status")
@@ -1515,26 +1538,80 @@ class LocalAgentDesktop(tk.Tk):
         self.task_tree.bind("<<TreeviewSelect>>", self.show_selected_task)
         self.task_tree.bind("<Button-1>", self.on_task_tree_click)
 
-        side = ttk.Frame(queue_area, style="Panel.TFrame")
-        side.grid(row=0, column=1, sticky="ns", padx=(12, 0))
-        ttk.Button(side, text="Clear Done", command=self.clear_done).pack(fill="x", pady=(0, 8))
-        ttk.Button(side, text="Refresh", command=self.refresh_all).pack(fill="x")
+        self.queue_sash = tk.Frame(self.queue_split, bg=CYBER["line"], cursor="sb_v_double_arrow", height=QUEUE_SPLITTER_HEIGHT)
+        self.queue_sash.grid_propagate(False)
+        queue_sash_line = tk.Frame(self.queue_sash, bg=CYBER["amber"], height=1, width=220)
+        queue_sash_line.place(relx=0.5, rely=0.5, anchor="center")
+        self.queue_sash.bind("<ButtonPress-1>", self.start_queue_split_drag)
+        self.queue_sash.bind("<B1-Motion>", self.drag_queue_split)
+        queue_sash_line.bind("<ButtonPress-1>", self.start_queue_split_drag)
+        queue_sash_line.bind("<B1-Motion>", self.drag_queue_split)
 
-        detail_area = tk.Frame(queue_split, bg=CYBER["panel"])
-        detail_area.columnconfigure(0, weight=1)
-        detail_area.rowconfigure(0, weight=1)
-        detail_outer, detail_inner = self.make_glow_frame(detail_area, bg=CYBER["field"], glow=CYBER["glow_soft"], depth=2)
-        detail_outer.grid(row=0, column=0, sticky="nsew")
+        self.detail_area = tk.Frame(self.queue_split, bg=CYBER["panel"])
+        self.detail_area.grid_propagate(False)
+        self.detail_area.columnconfigure(0, weight=1)
+        self.detail_area.rowconfigure(1, weight=1)
+        ttk.Label(self.detail_area, text="TASK_DETAIL", style="Panel.TLabel", foreground=CYBER["cyan"]).grid(row=0, column=0, sticky="w", pady=(0, 6))
+        detail_inner = tk.Frame(self.detail_area, bg=CYBER["field"], highlightthickness=1, highlightbackground=CYBER["line_soft"])
+        detail_inner.grid(row=1, column=0, sticky="nsew")
+        detail_inner.grid_propagate(False)
         detail_inner.columnconfigure(0, weight=1)
         detail_inner.rowconfigure(0, weight=1)
-        self.task_detail = self.make_text_box(detail_inner, height=9)
-        detail_y_scroll = ttk.Scrollbar(detail_inner, orient="vertical", command=self.task_detail.yview)
+        self.task_detail = self.make_text_box(detail_inner, height=1)
+        detail_y_scroll = AutoScrollbar(detail_inner, orient="vertical", command=self.task_detail.yview)
         self.task_detail.configure(yscrollcommand=detail_y_scroll.set)
         self.task_detail.grid(row=0, column=0, sticky="nsew")
         detail_y_scroll.grid(row=0, column=1, sticky="ns")
 
-        queue_split.add(queue_area, minsize=220, stretch="always")
-        queue_split.add(detail_area, minsize=150)
+        self.queue_pane_height = QUEUE_PANE_MIN_HEIGHT
+        self.queue_split_positioned = False
+        self.queue_split.after_idle(self.position_queue_split)
+
+    def position_queue_split(self) -> None:
+        if not hasattr(self, "queue_split"):
+            return
+        if self.queue_split_positioned:
+            return
+        height = self.queue_split.winfo_height()
+        if height <= 1:
+            self.queue_split.after(50, self.position_queue_split)
+            return
+        self.queue_split_positioned = True
+        self.place_queue_sash(int(height * QUEUE_SPLIT_INITIAL_RATIO))
+
+    def place_queue_sash(self, y: int) -> None:
+        height = self.queue_split.winfo_height()
+        if height <= 1:
+            return
+        available = max(1, height - QUEUE_SPLITTER_HEIGHT)
+        if available <= QUEUE_PANE_MIN_HEIGHT + DETAIL_PANE_MIN_HEIGHT:
+            min_y = max(1, min(QUEUE_PANE_MIN_HEIGHT, available // 2))
+            max_y = max(min_y, available - 1)
+        else:
+            min_y = QUEUE_PANE_MIN_HEIGHT
+            max_y = available - DETAIL_PANE_MIN_HEIGHT
+        self.queue_pane_height = min(max(y, min_y), max_y)
+        detail_y = self.queue_pane_height + QUEUE_SPLITTER_HEIGHT
+        detail_height = max(1, height - detail_y)
+        self.queue_area.place(x=0, y=0, relwidth=1, height=self.queue_pane_height)
+        self.queue_sash.place(x=0, y=self.queue_pane_height, relwidth=1, height=QUEUE_SPLITTER_HEIGHT)
+        self.detail_area.place(x=0, y=detail_y, relwidth=1, height=detail_height)
+
+    def clamp_queue_split(self, _event: tk.Event | None = None) -> None:
+        if not hasattr(self, "queue_split"):
+            return
+        if not self.queue_split_positioned:
+            return
+        self.place_queue_sash(getattr(self, "queue_pane_height", QUEUE_PANE_MIN_HEIGHT))
+
+    def start_queue_split_drag(self, event: tk.Event) -> None:
+        self.queue_split_positioned = True
+        self.queue_split_drag_start_y = event.y_root
+        self.queue_split_drag_start_height = self.queue_area.winfo_height()
+
+    def drag_queue_split(self, event: tk.Event) -> None:
+        delta = event.y_root - self.queue_split_drag_start_y
+        self.place_queue_sash(self.queue_split_drag_start_height + delta)
 
     def build_logs(self) -> None:
         self.logs_tab.columnconfigure(0, weight=1)
