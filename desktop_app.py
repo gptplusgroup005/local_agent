@@ -487,6 +487,7 @@ class LocalTaskEngine:
         "pi": math.pi,
         "e": math.e,
     }
+    MATH_FUNCTION_NAMES = tuple(ALLOWED_FUNCS)
 
     def __init__(self, config: dict[str, Any]) -> None:
         self.config = config
@@ -792,7 +793,12 @@ class LocalTaskEngine:
         expression = self.extract_expression(prompt)
         if expression is None:
             return None
-        value = self.safe_eval(expression)
+        try:
+            value = self.safe_eval(expression)
+        except (SyntaxError, ValueError, TypeError):
+            return None
+        except ArithmeticError as exc:
+            return f"Math error: {exc}"
         if isinstance(value, float) and value.is_integer():
             value = int(value)
         return f"{expression} = {value}"
@@ -811,16 +817,27 @@ class LocalTaskEngine:
         ]
         for prefix in prefixes:
             if lower.startswith(prefix):
-                expression = prompt[len(prefix) :].strip(" :?=")
+                expression = self.clean_expression(prompt[len(prefix) :])
                 return expression if self.looks_like_math(expression) else None
-        return prompt if self.looks_like_math(prompt) else None
+        expression = self.clean_expression(prompt)
+        return expression if self.looks_like_math(expression) else None
+
+    def clean_expression(self, expression: str) -> str:
+        return expression.strip().strip(" :?=")
 
     def looks_like_math(self, expression: str) -> bool:
         if not expression or len(expression) > 160:
             return False
         if not re.search(r"\d", expression):
             return False
-        return re.fullmatch(r"[0-9a-zA-Z_+\-*/%.(),\s]+", expression) is not None
+        if re.fullmatch(r"[0-9a-zA-Z_+\-*/%.(),\s]+", expression) is None:
+            return False
+        if re.search(r"[+*/%]|\*\*", expression):
+            return True
+        if re.search(r"(?<=\S)-(?=\S)", expression):
+            return True
+        funcs = "|".join(re.escape(name) for name in self.MATH_FUNCTION_NAMES)
+        return re.search(rf"\b(?:{funcs})\s*\(", expression) is not None
 
     def safe_eval(self, expression: str) -> int | float:
         tree = ast.parse(expression, mode="eval")

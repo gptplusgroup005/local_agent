@@ -4,6 +4,7 @@ const state = {
   activeTaskId: null,
   detailHeight: 230,
   renderedDetailTaskId: null,
+  settingsDirty: false,
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -52,13 +53,15 @@ function taskDetail(task) {
 
 function renderTasks(tasks) {
   const rows = tasks.map((task) => {
-    const checked = state.selectedIds.has(Number(task.id)) ? "checked" : "";
+    const id = Number(task.id);
+    const status = safeStatus(task.status);
+    const checked = state.selectedIds.has(id) ? "checked" : "";
     const selected = state.activeTaskId === Number(task.id) ? "selected" : "";
     return `
-      <tr class="${selected}" data-id="${task.id}">
-        <td><input class="row-check" type="checkbox" data-id="${task.id}" ${checked}></td>
-        <td class="status-${task.status}">${task.status}</td>
-        <td>${task.created_at}</td>
+      <tr class="${selected}" data-id="${id}">
+        <td><input class="row-check" type="checkbox" data-id="${id}" ${checked}></td>
+        <td class="status-${status}">${escapeHtml(status)}</td>
+        <td>${escapeHtml(task.created_at || "")}</td>
         <td>${escapeHtml(task.preview || "")}</td>
       </tr>
     `;
@@ -76,7 +79,8 @@ function renderTasks(tasks) {
   }
 }
 
-function renderSettings(config) {
+function renderSettings(config, force = false) {
+  if (state.settingsDirty && !force) return;
   $("#modelInput").value = config.model ?? "";
   $("#urlInput").value = config.ollama_url ?? "";
   $("#ctxInput").value = config.num_ctx ?? 4096;
@@ -105,13 +109,18 @@ async function refresh() {
 }
 
 function escapeHtml(value) {
-  return value.replace(/[&<>"']/g, (char) => ({
+  return String(value).replace(/[&<>"']/g, (char) => ({
     "&": "&amp;",
     "<": "&lt;",
     ">": "&gt;",
     '"': "&quot;",
     "'": "&#039;",
   })[char]);
+}
+
+function safeStatus(value) {
+  const status = String(value || "");
+  return ["queued", "running", "done", "failed"].includes(status) ? status : "queued";
 }
 
 async function queueTask() {
@@ -123,7 +132,7 @@ async function queueTask() {
 }
 
 async function saveSettings() {
-  await api("/api/settings", {
+  const result = await api("/api/settings", {
     method: "POST",
     body: JSON.stringify({
       model: $("#modelInput").value,
@@ -135,7 +144,9 @@ async function saveSettings() {
       allow_shell: $("#shellInput").checked,
     }),
   });
+  state.settingsDirty = false;
   await refresh();
+  return result;
 }
 
 function bindEvents() {
@@ -173,6 +184,14 @@ function bindEvents() {
     await refresh();
   });
   $("#saveSettingsBtn").addEventListener("click", saveSettings);
+  $$("#settings input, #settings select").forEach((input) => {
+    input.addEventListener("input", () => {
+      state.settingsDirty = true;
+    });
+    input.addEventListener("change", () => {
+      state.settingsDirty = true;
+    });
+  });
   $("#checkModelBtn").addEventListener("click", async () => {
     $("#modelStatus").textContent = "Checking Ollama...";
     const result = await api("/api/check_model", { method: "POST", body: JSON.stringify({}) });
