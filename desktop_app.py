@@ -166,13 +166,15 @@ def preview_text(text: str, limit: int = PROMPT_PREVIEW_LIMIT) -> str:
     return text if len(text) <= limit else text[: limit - 3] + "..."
 
 
-def clamp_queue_pane_height(total_height: int, desired_height: int) -> int:
-    available = max(1, total_height - QUEUE_SPLITTER_HEIGHT)
-    if available < QUEUE_PANE_MIN_HEIGHT + DETAIL_PANE_MIN_HEIGHT:
-        return max(1, min(available - 1, desired_height))
-    min_y = QUEUE_PANE_MIN_HEIGHT
-    max_y = available - DETAIL_PANE_MIN_HEIGHT
-    return min(max(desired_height, min_y), max_y)
+def queue_split_initial_sash_y(total_height: int) -> int:
+    pane_space = max(1, total_height - QUEUE_SPLITTER_HEIGHT)
+    requested = round(pane_space * QUEUE_SPLIT_INITIAL_RATIO)
+    if pane_space < QUEUE_PANE_MIN_HEIGHT + DETAIL_PANE_MIN_HEIGHT:
+        return min(max(1, requested), max(1, pane_space - 1))
+    return min(
+        max(QUEUE_PANE_MIN_HEIGHT, requested),
+        pane_space - DETAIL_PANE_MIN_HEIGHT,
+    )
 
 
 class TaskStore:
@@ -1532,10 +1534,19 @@ class LocalAgentDesktop(tk.Tk):
         deck_inner.rowconfigure(0, weight=1)
         deck_inner.grid_propagate(False)
 
-        self.queue_split = tk.Frame(deck_inner, bg=CYBER["panel"])
+        self.queue_split = tk.PanedWindow(
+            deck_inner,
+            orient=tk.VERTICAL,
+            bg=CYBER["line"],
+            bd=0,
+            borderwidth=0,
+            sashwidth=QUEUE_SPLITTER_HEIGHT,
+            sashrelief="flat",
+            opaqueresize=True,
+            showhandle=False,
+        )
         self.queue_split.grid(row=0, column=0, sticky="nsew")
-        self.queue_split.bind("<Configure>", self.clamp_queue_split)
-        self.queue_split.grid_propagate(False)
+        self.queue_split.bind("<Configure>", self.position_queue_split)
 
         self.queue_area = tk.Frame(self.queue_split, bg=CYBER["panel"])
         self.queue_area.grid_propagate(False)
@@ -1569,15 +1580,6 @@ class LocalAgentDesktop(tk.Tk):
         self.task_tree.bind("<<TreeviewSelect>>", self.show_selected_task)
         self.task_tree.bind("<Button-1>", self.on_task_tree_click)
 
-        self.queue_sash = tk.Frame(self.queue_split, bg=CYBER["line"], cursor="sb_v_double_arrow", height=QUEUE_SPLITTER_HEIGHT)
-        self.queue_sash.grid_propagate(False)
-        queue_sash_line = tk.Frame(self.queue_sash, bg=CYBER["amber"], height=1, width=220)
-        queue_sash_line.place(relx=0.5, rely=0.5, anchor="center")
-        self.queue_sash.bind("<ButtonPress-1>", self.start_queue_split_drag)
-        self.queue_sash.bind("<B1-Motion>", self.drag_queue_split)
-        queue_sash_line.bind("<ButtonPress-1>", self.start_queue_split_drag)
-        queue_sash_line.bind("<B1-Motion>", self.drag_queue_split)
-
         self.detail_area = tk.Frame(self.queue_split, bg=CYBER["panel"])
         self.detail_area.grid_propagate(False)
         self.detail_area.columnconfigure(0, weight=1)
@@ -1594,14 +1596,12 @@ class LocalAgentDesktop(tk.Tk):
         self.task_detail.grid(row=0, column=0, sticky="nsew")
         detail_y_scroll.grid(row=0, column=1, sticky="ns")
 
-        self.queue_pane_height = QUEUE_PANE_MIN_HEIGHT
-        self.queue_split_ratio = QUEUE_SPLIT_INITIAL_RATIO
-        self.queue_split_last_height = 0
+        self.queue_split.add(self.queue_area, minsize=QUEUE_PANE_MIN_HEIGHT, stretch="always")
+        self.queue_split.add(self.detail_area, minsize=DETAIL_PANE_MIN_HEIGHT, stretch="always")
         self.queue_split_positioned = False
-        self.queue_split_dragging = False
         self.queue_split.after_idle(self.position_queue_split)
 
-    def position_queue_split(self) -> None:
+    def position_queue_split(self, _event: tk.Event | None = None) -> None:
         if not hasattr(self, "queue_split"):
             return
         if self.queue_split_positioned:
@@ -1610,58 +1610,12 @@ class LocalAgentDesktop(tk.Tk):
         if height <= 1:
             self.queue_split.after(50, self.position_queue_split)
             return
+        try:
+            self.queue_split.sash_place(0, 0, queue_split_initial_sash_y(height))
+        except tk.TclError:
+            self.queue_split.after(50, self.position_queue_split)
+            return
         self.queue_split_positioned = True
-        self.place_queue_sash(int(height * QUEUE_SPLIT_INITIAL_RATIO))
-
-    def place_queue_sash(self, y: int) -> None:
-        height = self.queue_split.winfo_height()
-        if height <= 1:
-            return
-        self.queue_pane_height = clamp_queue_pane_height(height, y)
-        self.queue_split_last_height = height
-        self.queue_split_ratio = self.queue_pane_height / max(1, height - QUEUE_SPLITTER_HEIGHT)
-        detail_y = self.queue_pane_height + QUEUE_SPLITTER_HEIGHT
-        detail_height = max(1, height - detail_y)
-        self.queue_area.place(x=0, y=0, relwidth=1, height=self.queue_pane_height)
-        self.queue_sash.place(x=0, y=self.queue_pane_height, relwidth=1, height=QUEUE_SPLITTER_HEIGHT)
-        self.detail_area.place(x=0, y=detail_y, relwidth=1, height=detail_height)
-
-    def clamp_queue_split(self, _event: tk.Event | None = None) -> None:
-        if not hasattr(self, "queue_split"):
-            return
-        if not self.queue_split_positioned:
-            return
-        height = self.queue_split.winfo_height()
-        previous_height = getattr(self, "queue_split_last_height", 0)
-        if not getattr(self, "queue_split_dragging", False) and height > 1 and previous_height > 1 and height != previous_height:
-            available = max(1, height - QUEUE_SPLITTER_HEIGHT)
-            desired = int(available * getattr(self, "queue_split_ratio", QUEUE_SPLIT_INITIAL_RATIO))
-        else:
-            desired = getattr(self, "queue_pane_height", QUEUE_PANE_MIN_HEIGHT)
-        self.place_queue_sash(desired)
-
-    def start_queue_split_drag(self, event: tk.Event) -> None:
-        self.queue_split_positioned = True
-        self.queue_split_dragging = True
-        self.queue_sash.grab_set()
-        self.queue_split.bind_all("<Motion>", self.drag_queue_split)
-        self.queue_split.bind_all("<B1-Motion>", self.drag_queue_split)
-        self.queue_split.bind_all("<ButtonRelease-1>", self.stop_queue_split_drag)
-        self.drag_queue_split(event)
-
-    def drag_queue_split(self, event: tk.Event) -> None:
-        if not getattr(self, "queue_split_dragging", False):
-            return
-        y = event.y_root - self.queue_split.winfo_rooty() - (QUEUE_SPLITTER_HEIGHT // 2)
-        self.place_queue_sash(y)
-
-    def stop_queue_split_drag(self, _event: tk.Event) -> None:
-        self.queue_split_dragging = False
-        self.queue_split.unbind_all("<Motion>")
-        self.queue_split.unbind_all("<B1-Motion>")
-        self.queue_split.unbind_all("<ButtonRelease-1>")
-        if self.queue_sash.grab_current() is self.queue_sash:
-            self.queue_sash.grab_release()
 
     def build_logs(self) -> None:
         self.logs_tab.columnconfigure(0, weight=1)

@@ -5,9 +5,10 @@ from desktop_app import (
     DETAIL_PANE_MIN_HEIGHT,
     LocalTaskEngine,
     QUEUE_PANE_MIN_HEIGHT,
+    QUEUE_SPLIT_INITIAL_RATIO,
     QUEUE_SPLITTER_HEIGHT,
-    clamp_queue_pane_height,
     process_prompt,
+    queue_split_initial_sash_y,
 )
 
 
@@ -31,18 +32,19 @@ class LocalTaskEngineTests(unittest.TestCase):
     def test_trailing_question_marker_is_accepted_for_math(self) -> None:
         self.assertEqual(self.engine.handle("1+1=?"), "1+1 = 2")
 
-    def test_queue_splitter_clamps_to_panel_bounds(self) -> None:
+    def test_queue_splitter_initial_position_respects_panel_bounds(self) -> None:
         total_height = 500
         available = total_height - QUEUE_SPLITTER_HEIGHT
 
-        self.assertEqual(clamp_queue_pane_height(total_height, -50), QUEUE_PANE_MIN_HEIGHT)
+        self.assertGreaterEqual(queue_split_initial_sash_y(total_height), QUEUE_PANE_MIN_HEIGHT)
         self.assertEqual(
-            clamp_queue_pane_height(total_height, 999),
-            available - DETAIL_PANE_MIN_HEIGHT,
+            queue_split_initial_sash_y(1000),
+            round((1000 - QUEUE_SPLITTER_HEIGHT) * QUEUE_SPLIT_INITIAL_RATIO),
         )
+        self.assertLessEqual(queue_split_initial_sash_y(total_height), available - DETAIL_PANE_MIN_HEIGHT)
 
     def test_queue_splitter_stays_valid_when_space_is_tight(self) -> None:
-        self.assertEqual(clamp_queue_pane_height(20, 500), 5)
+        self.assertEqual(queue_split_initial_sash_y(20), 2)
 
 
 if __name__ == "__main__":
