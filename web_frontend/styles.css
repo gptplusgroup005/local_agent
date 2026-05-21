@@ -5,6 +5,8 @@
   --queue-min-height: 132px;
   --detail-min-height: 140px;
   --queue-resizer-height: 16px;
+  --queue-pane-gap: 22px;
+  --queue-split-y: 38%;
   --bg: #01040b;
   --panel: rgba(4, 18, 33, 0.82);
   --panel-strong: rgba(7, 29, 52, 0.94);
@@ -410,20 +412,29 @@ textarea {
 }
 
 .queue-grid {
-  display: grid;
-  grid-template-rows:
-    minmax(var(--queue-min-height), 1fr)
-    var(--queue-resizer-height)
-    minmax(var(--detail-min-height), var(--detail-height, 230px));
-  gap: 8px;
+  position: relative;
   min-height: 0;
   overflow: hidden;
 }
 
+.queue-grid > .table-panel,
+.queue-grid > .detail-panel,
+.queue-grid > .queue-resizer {
+  position: absolute;
+  left: 0;
+  right: 0;
+}
+
+.queue-grid > .table-panel {
+  top: 0;
+  height: var(--queue-split-y);
+}
+
 .queue-resizer {
-  position: relative;
+  top: calc(var(--queue-split-y) + (var(--queue-pane-gap) - var(--queue-resizer-height)) / 2);
   z-index: 5;
   cursor: row-resize;
+  height: var(--queue-resizer-height);
   min-height: var(--queue-resizer-height);
   touch-action: none;
   user-select: none;
@@ -450,6 +461,8 @@ textarea {
 }
 
 .detail-panel {
+  top: calc(var(--queue-split-y) + var(--queue-pane-gap));
+  bottom: 0;
   min-height: 0;
   overflow: hidden;
 }
