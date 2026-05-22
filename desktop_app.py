@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import copy
 import json
 import math
 import os
@@ -140,10 +141,13 @@ def read_json_file(path: Path, fallback: Any, encoding: str = "utf-8") -> Any:
 
 
 def write_json_file(path: Path, data: Any) -> None:
-    with path.open("w", encoding="utf-8") as f:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f".{path.name}.tmp")
+    with tmp_path.open("w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
         f.flush()
         os.fsync(f.fileno())
+    os.replace(tmp_path, path)
 
 
 def load_config() -> dict[str, Any]:
@@ -181,6 +185,8 @@ class TaskStore:
     def __init__(self, path: Path) -> None:
         self.path = path
         self.lock = threading.Lock()
+        self._cache: list[dict[str, Any]] | None = None
+        self._cache_mtime_ns: int | None = None
         if not self.path.exists():
             self.write([])
 
@@ -229,27 +235,47 @@ class TaskStore:
                 if task["id"] == task_id:
                     task.update(changes)
                     task["updated_at"] = now()
+                    self._write_unlocked(tasks)
                     break
-            self._write_unlocked(tasks)
 
     def clear_done(self) -> None:
         with self.lock:
-            tasks = [task for task in self._read_unlocked() if task["status"] != "done"]
-            self._write_unlocked(tasks)
+            current = self._read_unlocked()
+            tasks = [task for task in current if task["status"] != "done"]
+            if len(tasks) != len(current):
+                self._write_unlocked(tasks)
 
     def clear_ids(self, task_ids: set[int]) -> None:
+        if not task_ids:
+            return
         with self.lock:
-            tasks = [task for task in self._read_unlocked() if task["id"] not in task_ids]
-            self._write_unlocked(tasks)
+            current = self._read_unlocked()
+            tasks = [task for task in current if task["id"] not in task_ids]
+            if len(tasks) != len(current):
+                self._write_unlocked(tasks)
 
     def _read_unlocked(self) -> list[dict[str, Any]]:
+        try:
+            mtime_ns = self.path.stat().st_mtime_ns
+        except OSError:
+            mtime_ns = None
+        if self._cache is not None and self._cache_mtime_ns == mtime_ns:
+            return copy.deepcopy(self._cache)
         data = read_json_file(self.path, [])
         if not isinstance(data, list):
             return []
-        return [item for item in data if isinstance(item, dict) and isinstance(item.get("id"), int)]
+        tasks = [item for item in data if isinstance(item, dict) and isinstance(item.get("id"), int)]
+        self._cache = copy.deepcopy(tasks)
+        self._cache_mtime_ns = mtime_ns
+        return copy.deepcopy(tasks)
 
     def _write_unlocked(self, tasks: list[dict[str, Any]]) -> None:
         write_json_file(self.path, tasks)
+        try:
+            self._cache_mtime_ns = self.path.stat().st_mtime_ns
+        except OSError:
+            self._cache_mtime_ns = None
+        self._cache = copy.deepcopy(tasks)
 
 
 class ConversationMemory:
@@ -257,6 +283,8 @@ class ConversationMemory:
         self.path = path
         self.limit = limit
         self.lock = threading.Lock()
+        self._cache: list[dict[str, str]] | None = None
+        self._cache_mtime_ns: int | None = None
         if not self.path.exists():
             self.write([])
 
@@ -294,10 +322,24 @@ class ConversationMemory:
 
     def _write_unlocked(self, items: list[dict[str, str]]) -> None:
         write_json_file(self.path, items)
+        try:
+            self._cache_mtime_ns = self.path.stat().st_mtime_ns
+        except OSError:
+            self._cache_mtime_ns = None
+        self._cache = copy.deepcopy(items)
 
     def _read_unlocked(self) -> list[dict[str, str]]:
+        try:
+            mtime_ns = self.path.stat().st_mtime_ns
+        except OSError:
+            mtime_ns = None
+        if self._cache is not None and self._cache_mtime_ns == mtime_ns:
+            return copy.deepcopy(self._cache)
         data = read_json_file(self.path, [])
-        return data if isinstance(data, list) else []
+        items = data if isinstance(data, list) else []
+        self._cache = copy.deepcopy(items)
+        self._cache_mtime_ns = mtime_ns
+        return copy.deepcopy(items)
 
 
 class ComputerTools:

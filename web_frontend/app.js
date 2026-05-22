@@ -5,6 +5,7 @@ const state = {
   queueSplitY: null,
   renderedDetailTaskId: null,
   settingsDirty: false,
+  refreshPromise: null,
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -105,7 +106,13 @@ function render(payload) {
 }
 
 async function refresh() {
-  render(await api("/api/state"));
+  if (state.refreshPromise) return state.refreshPromise;
+  state.refreshPromise = api("/api/state")
+    .then(render)
+    .finally(() => {
+      state.refreshPromise = null;
+    });
+  return state.refreshPromise;
 }
 
 function escapeHtml(value) {

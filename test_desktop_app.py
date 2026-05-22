@@ -1,4 +1,6 @@
 import unittest
+from tempfile import TemporaryDirectory
+from pathlib import Path
 
 from desktop_app import (
     DEFAULT_CONFIG,
@@ -7,6 +9,7 @@ from desktop_app import (
     QUEUE_PANE_MIN_HEIGHT,
     QUEUE_SPLIT_INITIAL_RATIO,
     QUEUE_SPLITTER_HEIGHT,
+    TaskStore,
     process_prompt,
     queue_split_initial_sash_y,
 )
@@ -45,6 +48,30 @@ class LocalTaskEngineTests(unittest.TestCase):
 
     def test_queue_splitter_stays_valid_when_space_is_tight(self) -> None:
         self.assertEqual(queue_split_initial_sash_y(20), 2)
+
+    def test_task_store_does_not_write_for_missing_update(self) -> None:
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "tasks.json"
+            store = TaskStore(path)
+            before = path.stat().st_mtime_ns
+
+            store.update(999, status="done")
+
+            self.assertEqual(path.stat().st_mtime_ns, before)
+            self.assertEqual(store.read(), [])
+
+    def test_task_store_cache_refreshes_after_external_write(self) -> None:
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "tasks.json"
+            store = TaskStore(path)
+            self.assertEqual(store.read(), [])
+
+            path.write_text(
+                '[{"id": 7, "prompt": "hi", "status": "queued"}]',
+                encoding="utf-8",
+            )
+
+            self.assertEqual(store.read()[0]["id"], 7)
 
 
 if __name__ == "__main__":
