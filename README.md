@@ -2,7 +2,7 @@
 
 Native Windows desktop assistant prototype.
 
-The app runs as a real desktop window, keeps a local task queue, executes lightweight local tasks, and can optionally connect to a local Ollama model. After packaging, normal use does not require launching Python manually.
+The app runs as a real desktop window, keeps a local task queue, and sends open-ended tasks to a local Ollama model. After packaging, normal use does not require launching Python manually.
 
 ## Features
 
@@ -14,12 +14,10 @@ The app runs as a real desktop window, keeps a local task queue, executes lightw
   - select one task from the checkbox column
   - select all tasks from the toolbar
   - clear selected tasks in one action
-- Lightweight local task engine:
-  - math: `print the result of 1+2`, `calculate sqrt(16) + 2`
-  - date/time: `date`, `time`
+- Ollama-backed AI task engine for language, reasoning, and calculation requests
+- Explicit local computer actions:
   - desktop open: `open notepad`, `open C:\path`
   - allowlisted shell: `run python --version`
-- Optional Ollama backend for open-ended language tasks
 - Language setting for responses:
   - Auto detect command language, fallback English
   - Vietnamese

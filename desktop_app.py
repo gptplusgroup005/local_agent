@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import ast
 import copy
 import json
-import math
 import os
 import queue
 import re
@@ -18,7 +16,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from tkinter import messagebox, ttk
 from typing import Any
-from urllib.parse import quote, urlparse
+from urllib.parse import urlparse
 
 if getattr(sys, "frozen", False):
     ROOT = Path(sys.executable).resolve().parent
@@ -517,36 +515,8 @@ class ComputerTools:
         output = completed.stdout.strip() or completed.stderr.strip()
         return output or f"Command completed with exit code {completed.returncode}."
 
-class LocalTaskEngine:
-    ALLOWED_BINOPS = {
-        ast.Add: lambda a, b: a + b,
-        ast.Sub: lambda a, b: a - b,
-        ast.Mult: lambda a, b: a * b,
-        ast.Div: lambda a, b: a / b,
-        ast.FloorDiv: lambda a, b: a // b,
-        ast.Mod: lambda a, b: a % b,
-        ast.Pow: lambda a, b: a**b,
-    }
-    ALLOWED_UNARY = {
-        ast.UAdd: lambda value: value,
-        ast.USub: lambda value: -value,
-    }
-    ALLOWED_FUNCS = {
-        "abs": abs,
-        "round": round,
-        "sqrt": math.sqrt,
-        "sin": math.sin,
-        "cos": math.cos,
-        "tan": math.tan,
-        "log": math.log,
-        "log10": math.log10,
-    }
-    ALLOWED_NAMES = {
-        "pi": math.pi,
-        "e": math.e,
-    }
-    MATH_FUNCTION_NAMES = tuple(ALLOWED_FUNCS)
 
+class LocalComputerActionEngine:
     def __init__(self, config: dict[str, Any]) -> None:
         self.config = config
         self.tools = ComputerTools(config)
@@ -560,370 +530,8 @@ class LocalTaskEngine:
         if tool_result is not None:
             return tool_result
 
-        time_result = self.handle_time(text)
-        if time_result is not None:
-            return time_result
-
-        weather_result = self.handle_weather(text)
-        if weather_result is not None:
-            return weather_result
-
-        sports_result = self.handle_sports(text)
-        if sports_result is not None:
-            return sports_result
-
-        math_result = self.handle_math(text)
-        if math_result is not None:
-            return math_result
-
         return None
 
-    def handle_time(self, prompt: str) -> str | None:
-        lower = prompt.lower()
-        lang = LANGUAGES[response_language(self.config, prompt)]
-        if lower in {"time", "what time is it", "current time", "now", "gio hien tai", "mấy giờ rồi"}:
-            return f"{lang['time']}: {datetime.now().strftime('%H:%M:%S')}"
-        if lower in {"date", "today", "current date", "ngay hom nay", "hôm nay"}:
-            return f"{lang['date']}: {datetime.now().strftime('%Y-%m-%d')}"
-        return None
-
-    def handle_weather(self, prompt: str) -> str | None:
-        location = self.extract_weather_location(prompt)
-        if location is None:
-            return None
-        lang_code = response_language(self.config, prompt)
-        return self.fetch_weather(location, lang_code)
-
-    def extract_weather_location(self, prompt: str) -> str | None:
-        text = prompt.strip()
-        lower = text.lower()
-        weather_terms = ("weather", "forecast", "temperature", "thoi tiet", "thời tiết")
-        if not any(term in lower for term in weather_terms):
-            return None
-
-        patterns = [
-            r"today'?s\s+weather\s+in\s+(.+)",
-            r"weather\s+today\s+in\s+(.+)",
-            r"weather\s+in\s+(.+)",
-            r"forecast\s+for\s+(.+)",
-            r"temperature\s+in\s+(.+)",
-            r"thời tiết(?:\s+hôm nay)?\s+(?:ở|tại)\s+(.+)",
-            r"thoi tiet(?:\s+hom nay)?\s+(?:o|tai)\s+(.+)",
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, text, flags=re.IGNORECASE)
-            if match:
-                return match.group(1).strip(" .?!")
-        if lower in {"weather", "today's weather", "weather today", "forecast"}:
-            return "current location"
-        return None
-
-    def fetch_weather(self, location: str, lang_code: str) -> str:
-        query = "Vietnam" if location.lower() in {"vietnam", "viet nam", "việt nam"} else location
-        url = f"https://wttr.in/{quote(query)}?format=j1"
-        try:
-            request = urllib.request.Request(url, headers={"User-Agent": "Talos/1.0"})
-            with urllib.request.urlopen(request, timeout=8) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-            if lang_code == "vi":
-                return (
-                    f"Không lấy được dữ liệu thời tiết trực tiếp cho {location}.\n\n"
-                    "Talos có nhận diện được đây là yêu cầu thời tiết, nhưng provider realtime hiện không phản hồi.\n"
-                    f"Chi tiết: {exc}"
-                )
-            return (
-                f"I could not fetch live weather data for {location}.\n\n"
-                "Talos recognized this as a weather request, but the realtime weather provider is not responding.\n"
-                f"Details: {exc}"
-            )
-
-        current = (payload.get("current_condition") or [{}])[0]
-        today = (payload.get("weather") or [{}])[0]
-        area = (payload.get("nearest_area") or [{}])[0]
-        area_name = self.weather_value(area.get("areaName")) or location
-        country = self.weather_value(area.get("country"))
-        description = self.weather_value(current.get("weatherDesc")) or "unknown"
-        temp = current.get("temp_C", "?")
-        feels = current.get("FeelsLikeC", "?")
-        humidity = current.get("humidity", "?")
-        wind = current.get("windspeedKmph", "?")
-        precip = current.get("precipMM", "?")
-        min_temp = today.get("mintempC", "?")
-        max_temp = today.get("maxtempC", "?")
-        place = f"{area_name}, {country}" if country else area_name
-
-        if lang_code == "vi":
-            return (
-                f"Thời tiết hiện tại ở {place}:\n"
-                f"- Trạng thái: {description}\n"
-                f"- Nhiệt độ: {temp}°C, cảm giác như {feels}°C\n"
-                f"- Hôm nay: {min_temp}°C - {max_temp}°C\n"
-                f"- Độ ẩm: {humidity}%\n"
-                f"- Gió: {wind} km/h\n"
-                f"- Mưa ghi nhận: {precip} mm\n\n"
-                "Nguồn realtime: wttr.in"
-            )
-        return (
-            f"Current weather in {place}:\n"
-            f"- Condition: {description}\n"
-            f"- Temperature: {temp}°C, feels like {feels}°C\n"
-            f"- Today: {min_temp}°C - {max_temp}°C\n"
-            f"- Humidity: {humidity}%\n"
-            f"- Wind: {wind} km/h\n"
-            f"- Recorded precipitation: {precip} mm\n\n"
-            "Realtime source: wttr.in"
-        )
-
-    def weather_value(self, values: Any) -> str:
-        if isinstance(values, list) and values:
-            item = values[0]
-            if isinstance(item, dict):
-                return str(item.get("value", "")).strip()
-            return str(item).strip()
-        return ""
-
-    NBA_TEAMS = {
-        "timberwolves": ("MIN", "Minnesota Timberwolves"),
-        "wolves": ("MIN", "Minnesota Timberwolves"),
-        "minnesota": ("MIN", "Minnesota Timberwolves"),
-        "spurs": ("SA", "San Antonio Spurs"),
-        "san antonio": ("SA", "San Antonio Spurs"),
-        "lakers": ("LAL", "Los Angeles Lakers"),
-        "warriors": ("GS", "Golden State Warriors"),
-        "celtics": ("BOS", "Boston Celtics"),
-        "knicks": ("NY", "New York Knicks"),
-        "nuggets": ("DEN", "Denver Nuggets"),
-        "thunder": ("OKC", "Oklahoma City Thunder"),
-        "mavericks": ("DAL", "Dallas Mavericks"),
-        "mavs": ("DAL", "Dallas Mavericks"),
-        "heat": ("MIA", "Miami Heat"),
-        "bucks": ("MIL", "Milwaukee Bucks"),
-        "suns": ("PHX", "Phoenix Suns"),
-        "clippers": ("LAC", "LA Clippers"),
-        "sixers": ("PHI", "Philadelphia 76ers"),
-        "76ers": ("PHI", "Philadelphia 76ers"),
-        "bulls": ("CHI", "Chicago Bulls"),
-        "nets": ("BKN", "Brooklyn Nets"),
-        "rockets": ("HOU", "Houston Rockets"),
-        "kings": ("SAC", "Sacramento Kings"),
-        "grizzlies": ("MEM", "Memphis Grizzlies"),
-        "pelicans": ("NO", "New Orleans Pelicans"),
-        "cavaliers": ("CLE", "Cleveland Cavaliers"),
-        "cavs": ("CLE", "Cleveland Cavaliers"),
-        "magic": ("ORL", "Orlando Magic"),
-        "pacers": ("IND", "Indiana Pacers"),
-        "hawks": ("ATL", "Atlanta Hawks"),
-        "raptors": ("TOR", "Toronto Raptors"),
-        "hornets": ("CHA", "Charlotte Hornets"),
-        "pistons": ("DET", "Detroit Pistons"),
-        "jazz": ("UTAH", "Utah Jazz"),
-        "blazers": ("POR", "Portland Trail Blazers"),
-        "trail blazers": ("POR", "Portland Trail Blazers"),
-        "wizards": ("WSH", "Washington Wizards"),
-    }
-
-    def handle_sports(self, prompt: str) -> str | None:
-        lower = prompt.lower()
-        sports_terms = ("nba", "score", "scores", "tỉ số", "ti so", "kết quả", "ket qua", "trận", "tran")
-        if not any(term in lower for term in sports_terms):
-            return None
-        teams = self.extract_nba_teams(lower)
-        if len(teams) < 2:
-            return None
-        return self.fetch_nba_matchup_score(teams[0], teams[1], response_language(self.config, prompt))
-
-    def extract_nba_teams(self, lower_prompt: str) -> list[tuple[str, str]]:
-        found: list[tuple[int, str, str]] = []
-        for alias, team in self.NBA_TEAMS.items():
-            match = re.search(rf"\b{re.escape(alias)}\b", lower_prompt)
-            if match:
-                found.append((match.start(), team[0], team[1]))
-        unique: list[tuple[str, str]] = []
-        seen: set[str] = set()
-        for _pos, abbrev, name in sorted(found):
-            if abbrev not in seen:
-                unique.append((abbrev, name))
-                seen.add(abbrev)
-        return unique[:2]
-
-    def fetch_nba_matchup_score(self, team_a: tuple[str, str], team_b: tuple[str, str], lang_code: str) -> str:
-        try:
-            event = self.find_nba_matchup(team_a[0], team_b[0])
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-            if lang_code == "vi":
-                return (
-                    f"Không lấy được dữ liệu tỉ số trực tiếp cho {team_a[1]} vs {team_b[1]}.\n\n"
-                    "Talos đã nhận diện đây là yêu cầu tỉ số NBA, nhưng nguồn dữ liệu thể thao realtime hiện không phản hồi.\n"
-                    f"Chi tiết: {exc}"
-                )
-            return (
-                f"I could not fetch live score data for {team_a[1]} vs {team_b[1]}.\n\n"
-                "Talos recognized this as an NBA score request, but the realtime sports provider is not responding.\n"
-                f"Details: {exc}"
-            )
-        if event is None:
-            if lang_code == "vi":
-                return f"Không tìm thấy trận gần đây giữa {team_a[1]} và {team_b[1]} trong dữ liệu ESPN mà Talos truy cập được."
-            return f"I could not find a recent game between {team_a[1]} and {team_b[1]} in the ESPN data Talos can access."
-        return self.format_nba_event(event, team_a, team_b, lang_code)
-
-    def find_nba_matchup(self, abbrev_a: str, abbrev_b: str) -> dict[str, Any] | None:
-        for event in self.fetch_nba_team_schedule(abbrev_a):
-            competitors = (((event.get("competitions") or [{}])[0]).get("competitors") or [])
-            abbrevs = {str(item.get("team", {}).get("abbreviation", "")).upper() for item in competitors}
-            normalized = {self.normalize_nba_abbrev(item) for item in abbrevs}
-            if self.normalize_nba_abbrev(abbrev_a) in normalized and self.normalize_nba_abbrev(abbrev_b) in normalized:
-                return event
-        return None
-
-    def fetch_nba_team_schedule(self, abbrev: str) -> list[dict[str, Any]]:
-        team_slug = self.espn_team_slug(abbrev)
-        urls = [
-            f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/{team_slug}/schedule?limit=200",
-            f"https://site.web.api.espn.com/apis/v2/sports/basketball/nba/teams/{team_slug}/schedule?limit=200",
-        ]
-        last_error: Exception | None = None
-        for url in urls:
-            try:
-                request = urllib.request.Request(url, headers={"User-Agent": "Talos/1.0"})
-                with urllib.request.urlopen(request, timeout=10) as response:
-                    payload = json.loads(response.read().decode("utf-8"))
-                events = payload.get("events") or payload.get("team", {}).get("events") or []
-                if isinstance(events, list):
-                    return sorted(
-                        [event for event in events if isinstance(event, dict)],
-                        key=lambda item: item.get("date", ""),
-                        reverse=True,
-                    )
-            except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-                last_error = exc
-        if last_error is not None:
-            raise last_error
-        return []
-
-    def espn_team_slug(self, abbrev: str) -> str:
-        mapping = {
-            "MIN": "min",
-            "SA": "sa",
-            "GS": "gs",
-            "NO": "no",
-            "NY": "ny",
-            "WSH": "wsh",
-            "UTAH": "utah",
-        }
-        return mapping.get(abbrev, abbrev.lower())
-
-    def normalize_nba_abbrev(self, abbrev: str) -> str:
-        return {"SAS": "SA", "GSW": "GS", "NOP": "NO", "NYK": "NY", "UTA": "UTAH", "WAS": "WSH"}.get(abbrev.upper(), abbrev.upper())
-
-    def format_nba_event(self, event: dict[str, Any], team_a: tuple[str, str], team_b: tuple[str, str], lang_code: str) -> str:
-        competition = (event.get("competitions") or [{}])[0]
-        competitors = competition.get("competitors") or []
-        lines = []
-        for item in competitors:
-            team = item.get("team", {})
-            name = team.get("displayName") or team.get("shortDisplayName") or team.get("name") or "Unknown"
-            score = item.get("score", "?")
-            home_away = item.get("homeAway", "")
-            lines.append((home_away, name, score))
-        status = (competition.get("status") or event.get("status") or {}).get("type", {})
-        status_text = status.get("description") or status.get("shortDetail") or "Unknown status"
-        event_date = event.get("date", "")
-        score_line = " - ".join(f"{name} {score}" for _home_away, name, score in lines)
-        if lang_code == "vi":
-            return (
-                f"Tỉ số NBA gần nhất Talos tìm được cho {team_a[1]} vs {team_b[1]}:\n"
-                f"- {score_line}\n"
-                f"- Trạng thái: {status_text}\n"
-                f"- Thời điểm: {event_date}\n\n"
-                "Nguồn realtime: ESPN API"
-            )
-        return (
-            f"Latest NBA score Talos found for {team_a[1]} vs {team_b[1]}:\n"
-            f"- {score_line}\n"
-            f"- Status: {status_text}\n"
-            f"- Date: {event_date}\n\n"
-            "Realtime source: ESPN API"
-        )
-
-    def handle_math(self, prompt: str) -> str | None:
-        expression = self.extract_expression(prompt)
-        if expression is None:
-            return None
-        try:
-            value = self.safe_eval(expression)
-        except (SyntaxError, ValueError, TypeError):
-            return None
-        except ArithmeticError as exc:
-            return f"Math error: {exc}"
-        if isinstance(value, float) and value.is_integer():
-            value = int(value)
-        return f"{expression} = {value}"
-
-    def extract_expression(self, prompt: str) -> str | None:
-        lower = prompt.lower().strip()
-        prefixes = [
-            "print the result of",
-            "calculate",
-            "compute",
-            "solve",
-            "what is",
-            "result of",
-            "tinh",
-            "tính",
-        ]
-        for prefix in prefixes:
-            if lower.startswith(prefix):
-                expression = self.clean_expression(prompt[len(prefix) :])
-                return expression if self.looks_like_math(expression) else None
-        expression = self.clean_expression(prompt)
-        return expression if self.looks_like_math(expression) else None
-
-    def clean_expression(self, expression: str) -> str:
-        return expression.strip().strip(" :?=")
-
-    def looks_like_math(self, expression: str) -> bool:
-        if not expression or len(expression) > 160:
-            return False
-        if not re.search(r"\d", expression):
-            return False
-        if re.fullmatch(r"[0-9a-zA-Z_+\-*/%.(),\s]+", expression) is None:
-            return False
-        if re.search(r"[+*/%]|\*\*", expression):
-            return True
-        if re.search(r"(?<=\S)-(?=\S)", expression):
-            return True
-        funcs = "|".join(re.escape(name) for name in self.MATH_FUNCTION_NAMES)
-        return re.search(rf"\b(?:{funcs})\s*\(", expression) is not None
-
-    def safe_eval(self, expression: str) -> int | float:
-        tree = ast.parse(expression, mode="eval")
-        return self.eval_node(tree.body)
-
-    def eval_node(self, node: ast.AST) -> int | float:
-        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
-            return node.value
-        if isinstance(node, ast.BinOp):
-            op_type = type(node.op)
-            if op_type not in self.ALLOWED_BINOPS:
-                raise ValueError("Unsupported operator.")
-            return self.ALLOWED_BINOPS[op_type](self.eval_node(node.left), self.eval_node(node.right))
-        if isinstance(node, ast.UnaryOp):
-            op_type = type(node.op)
-            if op_type not in self.ALLOWED_UNARY:
-                raise ValueError("Unsupported unary operator.")
-            return self.ALLOWED_UNARY[op_type](self.eval_node(node.operand))
-        if isinstance(node, ast.Name):
-            if node.id not in self.ALLOWED_NAMES:
-                raise ValueError(f"Unknown name: {node.id}")
-            return self.ALLOWED_NAMES[node.id]
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-            if node.func.id not in self.ALLOWED_FUNCS:
-                raise ValueError(f"Unsupported function: {node.func.id}")
-            args = [self.eval_node(arg) for arg in node.args]
-            return self.ALLOWED_FUNCS[node.func.id](*args)
-        raise ValueError("Expression is not supported.")
 
 def memory_messages(memory: list[dict[str, str]]) -> list[dict[str, str]]:
     messages: list[dict[str, str]] = []
@@ -936,8 +544,8 @@ def memory_messages(memory: list[dict[str, str]]) -> list[dict[str, str]]:
 
 
 def process_prompt(prompt: str, config: dict[str, Any], memory: ConversationMemory | None = None) -> str:
-    local_engine = LocalTaskEngine(config)
-    local_result = local_engine.handle(prompt)
+    action_engine = LocalComputerActionEngine(config)
+    local_result = action_engine.handle(prompt)
     result = local_result if local_result is not None else call_model(prompt, config, memory.read() if memory else [])
     if memory is not None:
         memory.append_turn(prompt, result)
@@ -962,7 +570,7 @@ def call_model(prompt: str, config: dict[str, Any], memory: list[dict[str, str]]
                     "You are Talos, a local desktop assistant that helps the user get work done. "
                     f"Answer in {lang['instruction']}. "
                     "Be concise, practical, and action-oriented. "
-                    "Do not tell the user to search Google, open a weather site, or use another app. "
+                    "Do not tell the user to search Google or use another app. "
                     "If live data is required but unavailable, state the limitation clearly and say what integration is missing. "
                     "Use the conversation history to resolve follow-up requests, pronouns, corrections, and references to previous answers. "
                     "When a task requires an action you cannot perform yet, say exactly what capability is missing and what you can do instead. "
