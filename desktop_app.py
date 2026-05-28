@@ -12,7 +12,7 @@ import tkinter as tk
 import urllib.error
 import urllib.request
 from collections import Counter
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from tkinter import messagebox, ttk
 from typing import Any
@@ -36,6 +36,8 @@ QUEUE_PANE_MIN_HEIGHT = 132
 DETAIL_PANE_MIN_HEIGHT = 140
 QUEUE_SPLIT_INITIAL_RATIO = 0.38
 QUEUE_SPLITTER_HEIGHT = 14
+DEFAULT_MODEL = "qwen3:8b"
+DEFAULT_OLLAMA_CHAT_URL = "http://127.0.0.1:11434/api/chat"
 
 CYBER = {
     "bg": "#08020f",
@@ -70,11 +72,8 @@ LANGUAGES = {
 }
 
 DEFAULT_CONFIG: dict[str, Any] = {
-    "model": "qwen3:8b",
-    "ollama_url": "http://127.0.0.1:11434/api/chat",
-    "host": "127.0.0.1",
-    "port": 8765,
-    "workspace": ".",
+    "model": DEFAULT_MODEL,
+    "ollama_url": DEFAULT_OLLAMA_CHAT_URL,
     "temperature": 0.3,
     "num_ctx": 4096,
     "model_enabled": False,
@@ -503,7 +502,6 @@ class ComputerTools:
 
 class LocalComputerActionEngine:
     def __init__(self, config: dict[str, Any]) -> None:
-        self.config = config
         self.tools = ComputerTools(config)
 
     def handle(self, prompt: str) -> str | None:
@@ -600,13 +598,13 @@ def call_model(prompt: str, config: dict[str, Any], memory: list[dict[str, str]]
         raise RuntimeError(
             "Ollama backend is not reachable.\n\n"
             "Install Ollama, then run:\n"
-            f"ollama pull {config.get('model', 'qwen2.5:7b-instruct-q3_K_L')}\n\n"
+            f"ollama pull {config.get('model', DEFAULT_MODEL)}\n\n"
             f"Configured endpoint: {config.get('ollama_url')}\n"
             f"Details: {exc}"
         ) from exc
 
 def ollama_base_url(config: dict[str, Any]) -> str:
-    parsed = urlparse(config.get("ollama_url", "http://127.0.0.1:11434/api/chat"))
+    parsed = urlparse(config.get("ollama_url", DEFAULT_OLLAMA_CHAT_URL))
     return f"{parsed.scheme}://{parsed.netloc}"
 
 def check_ollama(config: dict[str, Any], timeout: float = 2.0) -> tuple[bool, str]:
@@ -768,7 +766,6 @@ class LocalAgentDesktop(tk.Tk):
         self.events: queue.Queue[str] = queue.Queue()
         self.stop_event = threading.Event()
         self.selected_task_ids: set[int] = set()
-        self.all_tasks_selected = False
 
         self.style = ttk.Style(self)
         self.style.theme_use("clam")

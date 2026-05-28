@@ -98,7 +98,7 @@ Install locally and create a desktop shortcut:
 Recommended model for the current target machine:
 
 ```text
-qwen2.5:7b-instruct-q3_K_L
+qwen3:8b
 ```
 
 To set up:

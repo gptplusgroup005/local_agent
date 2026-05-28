@@ -15,11 +15,24 @@ if (-not $ollama) {
   exit 1
 }
 
-$model = "qwen2.5:7b-instruct-q3_K_L"
+$configPath = Join-Path $root "config.json"
+$config = if (Test-Path -LiteralPath $configPath) {
+  Get-Content $configPath -Raw | ConvertFrom-Json
+} else {
+  [pscustomobject]@{
+    model = "qwen3:8b"
+    model_enabled = $false
+  }
+}
+if (-not $config.PSObject.Properties["model"]) {
+  $config | Add-Member -NotePropertyName model -NotePropertyValue "qwen3:8b"
+}
+if (-not $config.PSObject.Properties["model_enabled"]) {
+  $config | Add-Member -NotePropertyName model_enabled -NotePropertyValue $false
+}
+$model = if ($config.model) { $config.model } else { "qwen3:8b" }
 & $ollama.Source pull $model
 
-$configPath = Join-Path $root "config.json"
-$config = Get-Content $configPath -Raw | ConvertFrom-Json
 $config.model = $model
 $config.model_enabled = $true
 $config | ConvertTo-Json -Depth 8 | Set-Content $configPath -Encoding UTF8
