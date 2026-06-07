@@ -9,29 +9,27 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote
+from urllib.parse import parse_qs, unquote, urlparse
 
-from desktop_app import (
+from talos_core import (
     ROOT,
-    TASKS_PATH,
-    TASK_STATUSES,
-    MEMORY_PATH,
-    ConversationMemory,
-    TaskStore,
-    check_ollama,
     language_code,
     language_label,
     load_config,
     now,
-    preview_text,
-    process_prompt,
     save_config,
+)
+from talos_arduino import (
+    delete_workspace_file,
+    read_workspace_file,
+    run_arduino_compile,
+    workspace_context,
+    workspace_summary,
+    write_workspace_file,
 )
 
 ASSET_ROOT = Path(getattr(sys, "_MEIPASS", ROOT))
 FRONTEND = ASSET_ROOT / "web_frontend"
-STORE = TaskStore(TASKS_PATH)
-MEMORY = ConversationMemory(MEMORY_PATH)
 EVENTS: list[str] = []
 EVENT_LOCK = threading.Lock()
 STOP_EVENT = threading.Event()
@@ -43,56 +41,29 @@ def log_event(message: str) -> None:
 
 def worker_loop() -> None:
     while not STOP_EVENT.is_set():
-        task = STORE.claim()
-        if not task:
-            STOP_EVENT.wait(0.7)
-            continue
-        log_event(f"{now()} running task #{task['id']}")
-        try:
-            config = load_config()
-            result = process_prompt(task["prompt"], config, MEMORY)
-            STORE.update(task["id"], status="done", result=result, error="")
-            log_event(f"{now()} completed task #{task['id']}")
-        except Exception as exc:
-            STORE.update(task["id"], status="failed", error=str(exc))
-            log_event(f"{now()} failed task #{task['id']}: {exc}")
+        STOP_EVENT.wait(60)
 
 def state_payload() -> dict[str, Any]:
     config = load_config()
-    tasks = sorted(STORE.read(), key=lambda item: item["id"], reverse=True)
-    counts = {status: 0 for status in TASK_STATUSES}
-    for task in tasks:
-        status = str(task.get("status", ""))
-        if status in counts:
-            counts[status] += 1
     return {
+        "name": "Talos",
+        "role": "Codex local tool server",
         "root": str(ROOT),
         "language": language_label(config),
         "language_code": language_code(config),
-        "mode": "Prototype mode" if not config.get("model_enabled", False) else config.get("model", ""),
-        "shell": "shell allowlist" if config.get("allow_shell", False) else "shell locked",
         "config": {
-            "model": config.get("model", ""),
-            "ollama_url": config.get("ollama_url", ""),
-            "num_ctx": config.get("num_ctx", 4096),
-            "temperature": config.get("temperature", 0.4),
-            "model_enabled": bool(config.get("model_enabled", False)),
-            "allow_shell": bool(config.get("allow_shell", False)),
             "language": config.get("language", "vi"),
+            "arduino_workspace_path": config.get("arduino_workspace_path", ""),
+            "arduino_fqbn": config.get("arduino_fqbn", ""),
         },
-        "counts": counts,
-        "tasks": [
-            {
-                "id": task.get("id"),
-                "status": task.get("status", ""),
-                "created_at": task.get("created_at", ""),
-                "updated_at": task.get("updated_at", ""),
-                "prompt": task.get("prompt", ""),
-                "preview": preview_text(str(task.get("prompt", ""))),
-                "result": task.get("result", ""),
-                "error": task.get("error", ""),
-            }
-            for task in tasks
+        "arduino": workspace_summary(config),
+        "tools": [
+            "GET /api/state",
+            "GET /api/arduino_context",
+            "GET /api/arduino_file?path=...",
+            "POST /api/arduino_file",
+            "POST /api/arduino_delete",
+            "POST /api/arduino_verify",
         ],
         "events": list(EVENTS),
     }
@@ -101,60 +72,74 @@ class LocalAgentWebHandler(BaseHTTPRequestHandler):
     server_version = "LocalAgentWeb/1.0"
 
     def do_GET(self) -> None:
+        parsed = urlparse(self.path)
+        query = parse_qs(parsed.query)
         if self.path == "/api/state":
             self.send_json(state_payload())
             return
-        path = self.path.split("?", 1)[0]
+        if parsed.path == "/api/health":
+            self.send_json({"ok": True, "service": "Talos", "role": "Codex local tool server"})
+            return
+        if parsed.path == "/api/arduino_context":
+            config = load_config()
+            self.send_json({"ok": True, "context": workspace_context(config), "arduino": workspace_summary(config)})
+            return
+        if parsed.path == "/api/arduino_file":
+            result = read_workspace_file(load_config(), query.get("path", [""])[0])
+            self.send_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST)
+            return
+        path = parsed.path
         if path == "/":
             path = "/index.html"
         self.send_static(path)
 
     def do_POST(self) -> None:
         payload = self.read_json()
-        if self.path == "/api/tasks":
-            prompt = str(payload.get("prompt", "")).strip()
-            if not prompt:
-                self.send_json({"error": "Prompt is required."}, HTTPStatus.BAD_REQUEST)
-                return
-            task_id = STORE.create(prompt)
-            log_event(f"{now()} queued task #{task_id}")
-            self.send_json({"id": task_id})
-            return
-        if self.path == "/api/clear_done":
-            STORE.clear_done()
-            log_event(f"{now()} cleared completed tasks")
-            self.send_json({"ok": True})
-            return
-        if self.path == "/api/clear_selected":
-            ids = {int(item) for item in payload.get("ids", []) if str(item).isdigit()}
-            STORE.clear_ids(ids)
-            log_event(f"{now()} cleared {len(ids)} selected task(s)")
-            self.send_json({"ok": True})
-            return
         if self.path == "/api/settings":
             config = load_config()
-            for key in ("model", "ollama_url", "language"):
+            for key in ("language", "arduino_workspace_path", "arduino_fqbn"):
                 if key in payload:
                     config[key] = str(payload[key]).strip()
-            for key in ("model_enabled", "allow_shell"):
-                if key in payload:
-                    config[key] = bool(payload[key])
-            try:
-                if "num_ctx" in payload:
-                    config["num_ctx"] = int(payload["num_ctx"])
-                if "temperature" in payload:
-                    config["temperature"] = float(payload["temperature"])
-            except (TypeError, ValueError):
-                self.send_json({"error": "Context must be an integer and temperature must be a number."}, HTTPStatus.BAD_REQUEST)
-                return
             save_config(config)
             log_event(f"{now()} saved settings")
             self.send_json({"ok": True})
             return
-        if self.path == "/api/check_model":
-            ok, message = check_ollama(load_config())
-            log_event(f"{now()} model check: {'Ready' if ok else 'Not ready'}")
-            self.send_json({"ok": ok, "message": message})
+        if self.path == "/api/arduino_workspace":
+            config = load_config()
+            config["arduino_workspace_path"] = str(payload.get("path", "")).strip()
+            config["arduino_fqbn"] = str(payload.get("fqbn", config.get("arduino_fqbn", ""))).strip()
+            save_config(config)
+            summary = workspace_summary(config)
+            log_event(f"{now()} configured Arduino workspace: {summary.get('path') or 'none'}")
+            self.send_json({"ok": summary["valid"], "arduino": summary})
+            return
+        if self.path == "/api/arduino_verify":
+            config = load_config()
+            if "path" in payload:
+                config["arduino_workspace_path"] = str(payload.get("path", "")).strip()
+            if "fqbn" in payload:
+                config["arduino_fqbn"] = str(payload.get("fqbn", "")).strip()
+            save_config(config)
+            result = run_arduino_compile(config)
+            status = "passed" if result.get("ok") else result.get("status", "failed")
+            log_event(f"{now()} Arduino verify {status}")
+            self.send_json(result)
+            return
+        if self.path == "/api/arduino_file":
+            result = write_workspace_file(
+                load_config(),
+                str(payload.get("path", "")),
+                str(payload.get("content", "")),
+            )
+            if result.get("ok"):
+                log_event(f"{now()} wrote Arduino file: {result.get('path')}")
+            self.send_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST)
+            return
+        if self.path == "/api/arduino_delete":
+            result = delete_workspace_file(load_config(), str(payload.get("path", "")))
+            if result.get("ok"):
+                log_event(f"{now()} deleted Arduino file: {result.get('path')}")
+            self.send_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST)
             return
         self.send_json({"error": "Not found."}, HTTPStatus.NOT_FOUND)
 

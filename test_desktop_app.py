@@ -13,6 +13,16 @@ from desktop_app import (
     process_prompt,
     queue_split_initial_sash_y,
 )
+from talos_arduino import (
+    copy_workspace_to_sandbox,
+    delete_workspace_file,
+    read_workspace_file,
+    run_arduino_compile,
+    workspace_context,
+    workspace_summary,
+    write_workspace_file,
+)
+from talos_core import detect_language, language_label
 
 class LocalComputerActionEngineTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -39,6 +49,10 @@ class LocalComputerActionEngineTests(unittest.TestCase):
     def test_realtime_queries_are_not_handled_locally(self) -> None:
         self.assertIsNone(self.engine.handle("weather in Hanoi"))
         self.assertIsNone(self.engine.handle("latest NBA score for Lakers vs Warriors"))
+
+    def test_language_strings_survive_core_split(self) -> None:
+        self.assertEqual(language_label({"language": "vi"}), "Tiếng Việt")
+        self.assertEqual(detect_language("hãy sửa lỗi này"), "vi")
 
     def test_queue_splitter_initial_position_respects_panel_bounds(self) -> None:
         total_height = 500
@@ -77,6 +91,82 @@ class LocalComputerActionEngineTests(unittest.TestCase):
             )
 
             self.assertEqual(store.read()[0]["id"], 7)
+
+    def test_arduino_workspace_summary_finds_main_sketch_and_tabs(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Blink"
+            root.mkdir()
+            (root / "Blink.ino").write_text("void setup() {}\nvoid loop() {}\n", encoding="utf-8")
+            (root / "helpers.cpp").write_text("int value() { return 1; }\n", encoding="utf-8")
+            (root / "notes.tmp").write_text("ignored\n", encoding="utf-8")
+
+            summary = workspace_summary({"arduino_workspace_path": str(root), "arduino_fqbn": "arduino:avr:uno"})
+
+            self.assertTrue(summary["valid"])
+            self.assertEqual(summary["main_sketch"], "Blink.ino")
+            self.assertEqual([item["path"] for item in summary["files"]], ["Blink.ino", "helpers.cpp"])
+
+    def test_arduino_context_includes_sketch_files(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Sensor"
+            root.mkdir()
+            (root / "Sensor.ino").write_text("void setup() {}\nvoid loop() {}\n", encoding="utf-8")
+
+            context = workspace_context({"arduino_workspace_path": str(root), "arduino_fqbn": ""})
+
+            self.assertIn("Arduino workspace context", context)
+            self.assertIn("--- Sensor.ino ---", context)
+
+    def test_arduino_verify_requires_fqbn_before_compile(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Blink"
+            root.mkdir()
+            (root / "Blink.ino").write_text("void setup() {}\nvoid loop() {}\n", encoding="utf-8")
+
+            result = run_arduino_compile({"arduino_workspace_path": str(root), "arduino_fqbn": ""})
+
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["status"], "missing_fqbn")
+
+    def test_arduino_sandbox_copy_ignores_build_artifacts(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Blink"
+            root.mkdir()
+            (root / "Blink.ino").write_text("void setup() {}\nvoid loop() {}\n", encoding="utf-8")
+            (root / "build").mkdir()
+            (root / "build" / "old.o").write_text("ignore\n", encoding="utf-8")
+
+            sandbox = copy_workspace_to_sandbox(root)
+
+            self.assertTrue((sandbox / "Blink.ino").exists())
+            self.assertFalse((sandbox / "build").exists())
+
+    def test_arduino_workspace_file_write_read_and_delete_are_scoped(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Blink"
+            root.mkdir()
+            config = {"arduino_workspace_path": str(root), "arduino_fqbn": ""}
+
+            write_result = write_workspace_file(config, "Blink.ino", "void setup() {}\nvoid loop() {}\n")
+            read_result = read_workspace_file(config, "Blink.ino")
+            delete_result = delete_workspace_file(config, "Blink.ino")
+
+            self.assertTrue(write_result["ok"])
+            self.assertTrue(read_result["ok"])
+            self.assertIn("void setup", read_result["content"])
+            self.assertTrue(delete_result["ok"])
+            self.assertFalse((root / "Blink.ino").exists())
+
+    def test_arduino_workspace_file_rejects_escape_paths(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Blink"
+            root.mkdir()
+            config = {"arduino_workspace_path": str(root), "arduino_fqbn": ""}
+
+            result = write_workspace_file(config, "../outside.ino", "void setup() {}\n")
+
+            self.assertFalse(result["ok"])
+            self.assertFalse((Path(tmp) / "outside.ino").exists())
 
 if __name__ == "__main__":
     unittest.main()

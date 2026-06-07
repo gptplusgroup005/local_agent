@@ -1,15 +1,5 @@
 {
-  "model": "qwen3:8b",
-  "ollama_url": "http://127.0.0.1:11434/api/chat",
-  "temperature": 0.3,
-  "num_ctx": 4096,
-  "model_enabled": true,
   "language": "auto",
-  "allow_shell": false,
-  "allowed_commands": [
-    "dir",
-    "Get-ChildItem",
-    "rg",
-    "python --version"
-  ]
+  "arduino_workspace_path": "",
+  "arduino_fqbn": ""
 }

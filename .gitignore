@@ -21,6 +21,7 @@ dist/
 tasks.json
 memory.json
 tmp*/
+.talos_sandbox/
 *.log
 
 # Local/OS files

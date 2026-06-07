@@ -16,11 +16,6 @@ New-Item -ItemType Directory -Path $installDir -Force | Out-Null
 Copy-Item -LiteralPath $sourceExe -Destination (Join-Path $installDir "$appName.exe") -Force
 Copy-Item -LiteralPath (Join-Path $root "config.json") -Destination (Join-Path $installDir "config.json") -Force
 Copy-Item -LiteralPath (Join-Path $root "README.md") -Destination (Join-Path $installDir "README.md") -Force
-if (Test-Path -LiteralPath (Join-Path $root "tasks.json")) {
-  Copy-Item -LiteralPath (Join-Path $root "tasks.json") -Destination (Join-Path $installDir "tasks.json") -Force
-} else {
-  Copy-Item -LiteralPath (Join-Path $root "tasks.example.json") -Destination (Join-Path $installDir "tasks.json") -Force
-}
 
 $desktop = [Environment]::GetFolderPath("Desktop")
 $shortcutPath = Join-Path $desktop "$appName.lnk"

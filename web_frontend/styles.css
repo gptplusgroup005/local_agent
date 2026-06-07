@@ -2,11 +2,6 @@
   color-scheme: dark;
   --app-min-width: 520px;
   --app-min-height: 420px;
-  --queue-min-height: 132px;
-  --detail-min-height: 140px;
-  --queue-resizer-height: 16px;
-  --queue-pane-gap: 22px;
-  --queue-split-y: 38%;
   --bg: #0d1014;
   --rail: #11151b;
   --panel: #151a21;
@@ -349,7 +344,7 @@ table {
 .command-panel,
 .log-panel,
 .settings-panel,
-.queue-grid {
+.workspace-panel {
   min-height: 0;
 }
 
@@ -381,6 +376,7 @@ textarea {
 
 .action-row,
 .toolbar,
+.button-row,
 .switch-row {
   display: flex;
   gap: 12px;
@@ -408,6 +404,10 @@ textarea {
   justify-content: space-between;
 }
 
+.button-row {
+  margin-top: 0;
+}
+
 .action-row p {
   margin: 0;
   color: var(--muted);
@@ -426,57 +426,7 @@ textarea {
   padding: 0 22px;
 }
 
-.queue-grid {
-  position: relative;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.queue-grid > .table-panel,
-.queue-grid > .detail-panel,
-.queue-grid > .queue-resizer {
-  position: absolute;
-  left: 0;
-  right: 0;
-}
-
-.queue-grid > .table-panel {
-  top: 0;
-  height: var(--queue-split-y);
-}
-
-.queue-resizer {
-  top: calc(var(--queue-split-y) + (var(--queue-pane-gap) - var(--queue-resizer-height)) / 2);
-  z-index: 5;
-  cursor: row-resize;
-  height: var(--queue-resizer-height);
-  min-height: var(--queue-resizer-height);
-  touch-action: none;
-  user-select: none;
-}
-
-.queue-resizer::before {
-  position: absolute;
-  inset: 6px 42%;
-  content: "";
-  border-top: 1px solid rgba(132, 151, 171, 0.48);
-  border-bottom: 1px solid rgba(132, 151, 171, 0.28);
-}
-
-.queue-resizer::after {
-  position: absolute;
-  inset: 0;
-  content: "";
-}
-
-.queue-resizer:hover::before {
-  inset-inline: 35%;
-  border-top-color: var(--accent);
-}
-
 .detail-panel {
-  top: calc(var(--queue-split-y) + var(--queue-pane-gap));
-  bottom: 0;
   min-height: 0;
   overflow: hidden;
 }
@@ -491,15 +441,39 @@ textarea {
   min-width: 860px;
 }
 
-.queue-resizing,
-.queue-resizing * {
-  cursor: row-resize !important;
-  user-select: none !important;
-}
-
 .detail-panel {
   display: grid;
   grid-template-rows: auto 1fr;
+}
+
+.workspace-panel {
+  display: grid;
+  grid-template-rows: auto auto auto auto 1fr;
+  gap: 0;
+  overflow: hidden;
+}
+
+.workspace-grid {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.85fr) minmax(360px, 1.15fr);
+  gap: 14px;
+  min-height: 0;
+  margin-top: 16px;
+}
+
+.workspace-files,
+.workspace-output {
+  min-height: 0;
+  overflow: auto;
+}
+
+.workspace-output {
+  display: grid;
+  grid-template-rows: auto 1fr;
+}
+
+#arduinoOutput {
+  min-height: 0;
 }
 
 #taskDetail {
@@ -539,11 +513,6 @@ tr:hover td,
 tr.selected td {
   background: rgba(94, 168, 255, 0.1);
 }
-
-.status-done { color: var(--green); }
-.status-running { color: var(--accent-strong); }
-.status-failed { color: var(--danger); }
-.status-queued { color: var(--muted); }
 
 pre {
   min-height: 120px;
@@ -643,7 +612,8 @@ input[type="checkbox"] {
   }
 
   .stats,
-  .form-grid {
+  .form-grid,
+  .workspace-grid {
     grid-template-columns: 1fr;
   }
 }

@@ -1,63 +1,88 @@
 # Talos
 
-Native Windows desktop assistant prototype.
+Talos is a local Windows tool server for Codex.
 
-The app runs as a real desktop window, keeps a local task queue, and sends open-ended tasks to a local Ollama model. After packaging, normal use does not require launching Python manually.
+It does not try to replace Codex or run a separate AI model. Codex remains the reasoning layer in VS Code or another Codex surface. Talos provides local Arduino workspace access, sandbox verification, and a small HTTP API that Codex can call while you work.
 
-## Features
+## Current Scope
 
-- Native desktop UI, no browser required
-- Cyber neon purple/violet theme
-- Background worker inside the app process
-- Local task queue stored in `tasks.json`
-- Gmail-like queue selection:
-  - select one task from the checkbox column
-  - select all tasks from the toolbar
-  - clear selected tasks in one action
-- Ollama-backed AI task engine for language, reasoning, and calculation requests
-- Explicit local computer actions:
-  - desktop open: `open notepad`, `open C:\path`
-  - allowlisted shell: `run python --version`
-- Language setting for responses:
-  - Auto detect command language, fallback English
-  - Vietnamese
-  - English
-  - French
-  - Japanese
-  - Chinese
-- PyInstaller build scripts for a one-file Windows `.exe`
+- Native Windows desktop shell via pywebview.
+- Local HTTP API on `127.0.0.1`.
+- Arduino sketch folder registration.
+- Arduino source file discovery for `.ino`, `.h`, `.hpp`, `.c`, `.cpp`, `.S`, `.txt`, and `.md`.
+- Safe read/write/delete endpoints constrained to the configured sketch folder.
+- Sandbox compile using `arduino-cli compile --fqbn ...`.
+- Desktop UI for configuring the Arduino sketch folder and running sandbox verify.
+
+## Tool API
+
+Default source run URL:
+
+```text
+http://127.0.0.1:8787
+```
+
+Important endpoints:
+
+```text
+GET  /api/health
+GET  /api/state
+GET  /api/arduino_context
+GET  /api/arduino_file?path=Blink.ino
+POST /api/arduino_workspace
+POST /api/arduino_file
+POST /api/arduino_delete
+POST /api/arduino_verify
+```
+
+Example write request:
+
+```json
+{
+  "path": "Blink.ino",
+  "content": "void setup() {}\nvoid loop() {}\n"
+}
+```
+
+Example verify request:
+
+```json
+{
+  "path": "C:\\Users\\You\\Documents\\Arduino\\Blink",
+  "fqbn": "arduino:avr:uno"
+}
+```
 
 ## Project Files
 
 ```text
-desktop_app.py        Main desktop app
-config.json           Runtime config
-tasks.example.json    Empty task queue example
-launch_desktop.ps1    Open installed app, fallback to source mode
-build_app.ps1         Build one-file Windows executable
-install_app.ps1       Install built app to LocalAppData and create desktop shortcut
-install_ollama.ps1    Helper to install Ollama when network allows
-setup_model.ps1       Pull the configured Ollama model
-requirements.txt      Build dependency list
+desktop_app.py          Desktop pywebview shell
+web_app.py              Local HTTP tool server
+talos_client.py         CLI bridge for Codex and terminal use
+talos_core.py           Shared config, paths, utility code, and legacy local actions
+talos_arduino.py        Arduino workspace and sandbox runner
+web_frontend/           Desktop UI assets
+config.json             Runtime configuration
+build_app.ps1           Build one-file Windows executable
+install_app.ps1         Install built app to LocalAppData and create desktop shortcut
+launch_desktop.ps1      Open source app or installed app
+requirements.txt        Build/runtime Python dependencies
 ```
 
-`tasks.json` is runtime state and is intentionally ignored by Git.
+Runtime files such as `.talos_sandbox/`, `tasks.json`, and `memory.json` are ignored by Git.
 
-## Normal Use
+## Codex Bridge CLI
 
-After install, open the Desktop shortcut:
+Codex can call Talos from a VS Code terminal through `talos_client.py`.
 
-```text
-Talos
+```powershell
+python -B talos_client.py state
+python -B talos_client.py workspace "C:\Users\You\Documents\Arduino\Blink" --fqbn arduino:avr:uno
+python -B talos_client.py context
+python -B talos_client.py read Blink.ino
+python -B talos_client.py write Blink.ino --from-file edited\Blink.ino
+python -B talos_client.py verify
 ```
-
-Installed app path:
-
-```text
-%LOCALAPPDATA%\Programs\Talos\Talos.exe
-```
-
-Python is not needed for normal installed usage.
 
 ## Run From Source
 
@@ -71,57 +96,34 @@ Or:
 .\launch_desktop.ps1
 ```
 
+To run only the HTTP server:
+
+```powershell
+python -B web_app.py --port 8787
+```
+
 ## Build And Install
 
-Python is only required for development/building the `.exe`.
-
-Install build dependencies:
+Install dependencies:
 
 ```powershell
 python -m pip install -r requirements.txt
 ```
 
-Build the app:
+Build:
 
 ```powershell
 .\build_app.ps1
 ```
 
-Install locally and create a desktop shortcut:
+Install locally:
 
 ```powershell
 .\install_app.ps1
 ```
 
-## Optional Ollama Model
+## Arduino Requirements
 
-Recommended model for the current target machine:
+For sandbox verify, install `arduino-cli` and make sure it is available in `PATH`.
 
-```text
-qwen3:8b
-```
-
-To set up:
-
-```powershell
-.\install_ollama.ps1
-.\setup_model.ps1
-```
-
-If the installer cannot reach GitHub release assets, install Ollama manually:
-
-```text
-https://ollama.com/download/windows
-```
-
-Then run:
-
-```powershell
-.\setup_model.ps1
-```
-
-Open the app, go to `Settings`, and press `Test AI Model`.
-
-## Safety Note
-
-Shell execution is disabled by default. The `run ...` command only works when `allow_shell` is enabled and the exact command is present in `allowed_commands` inside `config.json`.
+Talos does not compile in your real sketch folder. It copies the sketch into `.talos_sandbox/arduino/...` and compiles the copy.
