@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import ctypes
+import os
+import re
 import shutil
 import subprocess
 from datetime import datetime
@@ -21,6 +24,7 @@ IGNORED_DIRS = {
 MAX_CONTEXT_BYTES = 64_000
 MAX_FILE_BYTES = 128_000
 SANDBOX_ROOT = ROOT / ".talos_sandbox" / "arduino"
+WINDOW_TITLE_LIMIT = 512
 
 
 def arduino_config(config: dict[str, Any]) -> dict[str, str]:
@@ -32,6 +36,114 @@ def arduino_config(config: dict[str, Any]) -> dict[str, str]:
 
 def is_source_file(path: Path) -> bool:
     return path.suffix in ARDUINO_EXTENSIONS
+
+
+def open_window_titles() -> list[str]:
+    if os.name != "nt":
+        return []
+    titles: list[str] = []
+    user32 = ctypes.windll.user32
+
+    def callback(hwnd: int, _lparam: int) -> bool:
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        length = user32.GetWindowTextLengthW(hwnd)
+        if length <= 0:
+            return True
+        buffer = ctypes.create_unicode_buffer(min(length + 1, WINDOW_TITLE_LIMIT))
+        user32.GetWindowTextW(hwnd, buffer, len(buffer))
+        title = buffer.value.strip()
+        if title:
+            titles.append(title)
+        return True
+
+    enum_proc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)(callback)
+    user32.EnumWindows(enum_proc, 0)
+    return titles
+
+
+def extract_ino_names(title: str) -> list[str]:
+    names: list[str] = []
+    for match in re.findall(r"(?i)([A-Za-z0-9 _.-]+\.ino)", title):
+        name = match.strip(" -|[]()")
+        if name and name.lower().endswith(".ino") and name not in names:
+            names.append(name)
+    return names
+
+
+def arduino_search_roots(config: dict[str, Any]) -> list[Path]:
+    roots: list[Path] = []
+    configured = configured_workspace(config)
+    if configured is not None:
+        roots.append(configured.parent)
+    for raw_root in str(config.get("arduino_search_roots", "")).split(";"):
+        root = resolve_workspace(raw_root)
+        if root is not None:
+            roots.append(root)
+    home = Path.home()
+    roots.extend(
+        [
+            home / "Documents" / "Arduino",
+            home / "OneDrive" / "Documents" / "Arduino",
+            home / "Arduino",
+        ]
+    )
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        try:
+            resolved = root.resolve()
+        except OSError:
+            continue
+        key = str(resolved).lower()
+        if key not in seen and resolved.exists() and resolved.is_dir():
+            unique.append(resolved)
+            seen.add(key)
+    return unique
+
+
+def find_sketch_folder(sketch_name: str, roots: list[Path]) -> Path | None:
+    sketch_path = Path(sketch_name)
+    folder_name = sketch_path.stem
+    for root in roots:
+        direct = root / folder_name
+        if (direct / sketch_path.name).exists():
+            return direct.resolve()
+    for root in roots:
+        try:
+            for match in root.rglob(sketch_path.name):
+                if match.is_file():
+                    return match.parent.resolve()
+        except OSError:
+            continue
+    return None
+
+
+def discover_arduino_projects(config: dict[str, Any], titles: list[str] | None = None) -> list[dict[str, Any]]:
+    window_titles = titles if titles is not None else open_window_titles()
+    roots = arduino_search_roots(config)
+    projects: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for title in window_titles:
+        lower = title.lower()
+        if "arduino" not in lower and ".ino" not in lower:
+            continue
+        for sketch in extract_ino_names(title):
+            folder = find_sketch_folder(sketch, roots)
+            key = str(folder).lower() if folder else f"{title.lower()}::{sketch.lower()}"
+            if key in seen:
+                continue
+            seen.add(key)
+            projects.append(
+                {
+                    "title": title,
+                    "sketch": sketch,
+                    "path": str(folder) if folder else "",
+                    "valid": folder is not None,
+                    "message": "Sketch folder found." if folder else "Open Arduino sketch detected, but matching folder was not found in search roots.",
+                }
+            )
+    return projects
 
 
 def resolve_workspace(path_text: str) -> Path | None:

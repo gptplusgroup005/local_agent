@@ -28,6 +28,7 @@ Important endpoints:
 GET  /api/health
 GET  /api/state
 GET  /api/arduino_context
+GET  /api/arduino_projects
 GET  /api/arduino_file?path=Blink.ino
 POST /api/arduino_workspace
 POST /api/arduino_file
@@ -77,6 +78,7 @@ Codex can call Talos from a VS Code terminal through `talos_client.py`.
 
 ```powershell
 python -B talos_client.py state
+python -B talos_client.py projects
 python -B talos_client.py workspace "C:\Users\You\Documents\Arduino\Blink" --fqbn arduino:avr:uno
 python -B talos_client.py context
 python -B talos_client.py read Blink.ino

@@ -35,11 +35,12 @@ function escapeHtml(value) {
 
 function renderStats(payload) {
   const arduino = payload.arduino || {};
+  const projects = payload.arduino_projects || [];
   const rows = [
     ["Role", payload.role || "Tool server"],
+    ["Open sketches", String(projects.length)],
     ["Arduino", arduino.valid ? "Ready" : "Not ready"],
     ["Files", String((arduino.files || []).length)],
-    ["FQBN", arduino.fqbn || "Unset"],
   ];
   $("#stats").innerHTML = rows
     .map(([label, value]) => `<div class="stat"><span>${escapeHtml(label)}</span><b>${escapeHtml(value)}</b></div>`)
@@ -66,11 +67,37 @@ function renderArduino(arduino, force = false) {
   `).join("");
 }
 
+function renderArduinoProjects(projects = []) {
+  if (!projects.length) {
+    $("#arduinoProjects").innerHTML = `<div class="project-row"><div><div class="project-title">No open Arduino sketches detected</div><div class="project-path">Open one or more .ino sketches in Arduino IDE, then refresh.</div></div></div>`;
+    return;
+  }
+  $("#arduinoProjects").innerHTML = projects.map((project, index) => `
+    <div class="project-row">
+      <div>
+        <div class="project-title">${escapeHtml(project.sketch || "Arduino sketch")} ${project.valid ? "" : "(folder not found)"}</div>
+        <div class="project-path">${escapeHtml(project.path || project.title || project.message || "")}</div>
+      </div>
+      <button class="button ghost select-project" data-index="${index}" ${project.valid ? "" : "disabled"}>Select</button>
+    </div>
+  `).join("");
+  $$(".select-project").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const project = projects[Number(button.dataset.index)];
+      if (!project?.path) return;
+      $("#arduinoPathInput").value = project.path;
+      state.arduinoDirty = true;
+      await saveArduinoWorkspace();
+    });
+  });
+}
+
 function render(payload) {
   $("#modeLine").textContent = `${payload.role} | ${payload.root}`;
   $("#toolList").textContent = (payload.tools || []).join("\n");
   renderStats(payload);
   renderArduino(payload.arduino);
+  renderArduinoProjects(payload.arduino_projects || []);
   $("#logText").textContent = (payload.events || []).join("\n");
 }
 

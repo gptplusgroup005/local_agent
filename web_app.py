@@ -21,6 +21,7 @@ from talos_core import (
 )
 from talos_arduino import (
     delete_workspace_file,
+    discover_arduino_projects,
     read_workspace_file,
     run_arduino_compile,
     workspace_context,
@@ -57,9 +58,11 @@ def state_payload() -> dict[str, Any]:
             "arduino_fqbn": config.get("arduino_fqbn", ""),
         },
         "arduino": workspace_summary(config),
+        "arduino_projects": discover_arduino_projects(config),
         "tools": [
             "GET /api/state",
             "GET /api/arduino_context",
+            "GET /api/arduino_projects",
             "GET /api/arduino_file?path=...",
             "POST /api/arduino_file",
             "POST /api/arduino_delete",
@@ -83,6 +86,10 @@ class LocalAgentWebHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/arduino_context":
             config = load_config()
             self.send_json({"ok": True, "context": workspace_context(config), "arduino": workspace_summary(config)})
+            return
+        if parsed.path == "/api/arduino_projects":
+            config = load_config()
+            self.send_json({"ok": True, "projects": discover_arduino_projects(config)})
             return
         if parsed.path == "/api/arduino_file":
             result = read_workspace_file(load_config(), query.get("path", [""])[0])

@@ -42,6 +42,7 @@ def main() -> None:
 
     subcommands.add_parser("state")
     subcommands.add_parser("context")
+    subcommands.add_parser("projects")
 
     workspace = subcommands.add_parser("workspace")
     workspace.add_argument("path")
@@ -70,6 +71,9 @@ def main() -> None:
         return
     if args.command == "context":
         print_json(request_json(args.base_url, "GET", "/api/arduino_context"))
+        return
+    if args.command == "projects":
+        print_json(request_json(args.base_url, "GET", "/api/arduino_projects"))
         return
     if args.command == "workspace":
         print_json(request_json(args.base_url, "POST", "/api/arduino_workspace", {"path": args.path, "fqbn": args.fqbn}))

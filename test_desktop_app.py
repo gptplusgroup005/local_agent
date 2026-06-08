@@ -16,6 +16,8 @@ from desktop_app import (
 from talos_arduino import (
     copy_workspace_to_sandbox,
     delete_workspace_file,
+    discover_arduino_projects,
+    extract_ino_names,
     read_workspace_file,
     run_arduino_compile,
     workspace_context,
@@ -105,6 +107,29 @@ class LocalComputerActionEngineTests(unittest.TestCase):
             self.assertTrue(summary["valid"])
             self.assertEqual(summary["main_sketch"], "Blink.ino")
             self.assertEqual([item["path"] for item in summary["files"]], ["Blink.ino", "helpers.cpp"])
+
+    def test_arduino_window_titles_detect_multiple_open_sketches(self) -> None:
+        self.assertEqual(extract_ino_names("1.ino - Arduino IDE"), ["1.ino"])
+        self.assertEqual(extract_ino_names("2.ino | Arduino IDE"), ["2.ino"])
+
+    def test_arduino_discovery_maps_open_sketches_to_folders(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Arduino"
+            one = root / "1"
+            two = root / "2"
+            one.mkdir(parents=True)
+            two.mkdir()
+            (one / "1.ino").write_text("void setup() {}\nvoid loop() {}\n", encoding="utf-8")
+            (two / "2.ino").write_text("void setup() {}\nvoid loop() {}\n", encoding="utf-8")
+
+            projects = discover_arduino_projects(
+                {"arduino_search_roots": str(root)},
+                titles=["1.ino - Arduino IDE", "2.ino - Arduino IDE"],
+            )
+
+            self.assertEqual([project["sketch"] for project in projects], ["1.ino", "2.ino"])
+            self.assertEqual([Path(project["path"]).name for project in projects], ["1", "2"])
+            self.assertTrue(all(project["valid"] for project in projects))
 
     def test_arduino_context_includes_sketch_files(self) -> None:
         with TemporaryDirectory() as tmp:
