@@ -23,21 +23,17 @@ MAX_CONTEXT_BYTES = 64_000
 MAX_FILE_BYTES = 128_000
 SANDBOX_ROOT = ROOT / ".talos_sandbox" / "arduino"
 
-
 def arduino_config(config: dict[str, Any]) -> dict[str, str]:
     return {
         "workspace_path": str(config.get("arduino_workspace_path", "")).strip(),
         "fqbn": str(config.get("arduino_fqbn", "")).strip(),
     }
 
-
 def is_source_file(path: Path) -> bool:
     return path.suffix in ARDUINO_EXTENSIONS
 
-
 def open_window_titles() -> list[str]:
     return list_window_titles()
-
 
 def arduino_search_roots(config: dict[str, Any]) -> list[Path]:
     roots: list[Path] = []
@@ -69,7 +65,6 @@ def arduino_search_roots(config: dict[str, Any]) -> list[Path]:
             seen.add(key)
     return unique
 
-
 def find_sketch_folder(sketch_name: str, roots: list[Path]) -> Path | None:
     sketch_path = Path(sketch_name)
     folder_name = sketch_path.stem
@@ -85,7 +80,6 @@ def find_sketch_folder(sketch_name: str, roots: list[Path]) -> Path | None:
         except OSError:
             continue
     return None
-
 
 def discover_arduino_projects(config: dict[str, Any], titles: list[str] | None = None) -> list[dict[str, Any]]:
     window_titles = titles if titles is not None else open_window_titles()
@@ -114,7 +108,6 @@ def discover_arduino_projects(config: dict[str, Any], titles: list[str] | None =
             )
     return projects
 
-
 def resolve_workspace(path_text: str) -> Path | None:
     path_text = path_text.strip().strip('"')
     if not path_text:
@@ -124,13 +117,11 @@ def resolve_workspace(path_text: str) -> Path | None:
     except OSError:
         return None
 
-
 def configured_workspace(config: dict[str, Any]) -> Path | None:
     workspace = resolve_workspace(arduino_config(config)["workspace_path"])
     if workspace is None or not workspace.exists() or not workspace.is_dir():
         return None
     return workspace
-
 
 def resolve_workspace_file(config: dict[str, Any], relative_path: str, *, must_exist: bool = False) -> tuple[Path | None, str | None]:
     workspace = configured_workspace(config)
@@ -150,7 +141,6 @@ def resolve_workspace_file(config: dict[str, Any], relative_path: str, *, must_e
         return None, "File was not found in the Arduino sketch folder."
     return path, None
 
-
 def read_workspace_file(config: dict[str, Any], relative_path: str) -> dict[str, Any]:
     path, error = resolve_workspace_file(config, relative_path, must_exist=True)
     if error or path is None:
@@ -166,7 +156,6 @@ def read_workspace_file(config: dict[str, Any], relative_path: str) -> dict[str,
         "bytes": path.stat().st_size,
     }
 
-
 def write_workspace_file(config: dict[str, Any], relative_path: str, content: str) -> dict[str, Any]:
     path, error = resolve_workspace_file(config, relative_path)
     if error or path is None:
@@ -181,7 +170,6 @@ def write_workspace_file(config: dict[str, Any], relative_path: str, content: st
         "bytes": path.stat().st_size,
     }
 
-
 def delete_workspace_file(config: dict[str, Any], relative_path: str) -> dict[str, Any]:
     path, error = resolve_workspace_file(config, relative_path, must_exist=True)
     if error or path is None:
@@ -190,7 +178,6 @@ def delete_workspace_file(config: dict[str, Any], relative_path: str) -> dict[st
     assert workspace is not None
     path.unlink()
     return {"ok": True, "path": path.relative_to(workspace).as_posix()}
-
 
 def iter_source_files(workspace: Path) -> list[Path]:
     files: list[Path] = []
@@ -206,7 +193,6 @@ def iter_source_files(workspace: Path) -> list[Path]:
             files.append(path)
     return sorted(files, key=lambda item: item.relative_to(workspace).as_posix().lower())
 
-
 def find_main_sketch(workspace: Path, files: list[Path] | None = None) -> Path | None:
     source_files = files if files is not None else iter_source_files(workspace)
     ino_files = [path for path in source_files if path.suffix.lower() == ".ino"]
@@ -217,7 +203,6 @@ def find_main_sketch(workspace: Path, files: list[Path] | None = None) -> Path |
         if path.resolve() == preferred.resolve():
             return path
     return ino_files[0]
-
 
 def file_row(workspace: Path, path: Path) -> dict[str, Any]:
     try:
@@ -230,7 +215,6 @@ def file_row(workspace: Path, path: Path) -> dict[str, Any]:
         "bytes": stat.st_size,
         "lines": content.count("\n") + (1 if content else 0),
     }
-
 
 def workspace_summary(config: dict[str, Any]) -> dict[str, Any]:
     arduino = arduino_config(config)
@@ -267,7 +251,6 @@ def workspace_summary(config: dict[str, Any]) -> dict[str, Any]:
         "message": "Arduino sketch folder ready." if main_sketch else "No .ino file found in this folder.",
     }
 
-
 def workspace_context(config: dict[str, Any], max_bytes: int = MAX_CONTEXT_BYTES) -> str:
     summary = workspace_summary(config)
     if not summary["valid"]:
@@ -298,7 +281,6 @@ def workspace_context(config: dict[str, Any], max_bytes: int = MAX_CONTEXT_BYTES
         used += block_size
     return "\n".join(lines).strip()
 
-
 def copy_workspace_to_sandbox(workspace: Path) -> Path:
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     target = SANDBOX_ROOT / f"{workspace.name}_{stamp}"
@@ -313,7 +295,6 @@ def copy_workspace_to_sandbox(workspace: Path) -> Path:
 
     shutil.copytree(workspace, target, ignore=ignore)
     return target
-
 
 def run_arduino_compile(config: dict[str, Any], timeout: int = 120) -> dict[str, Any]:
     summary = workspace_summary(config)

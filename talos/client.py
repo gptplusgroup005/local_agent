@@ -11,7 +11,6 @@ from typing import Any
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8787"
 
-
 def request_json(base_url: str, method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
     url = base_url.rstrip("/") + path
     data = None if payload is None else json.dumps(payload).encode("utf-8")
@@ -30,10 +29,8 @@ def request_json(base_url: str, method: str, path: str, payload: dict[str, Any] 
     except urllib.error.URLError as exc:
         raise SystemExit(f"Talos is not reachable at {base_url}: {exc}") from exc
 
-
 def print_json(payload: dict[str, Any]) -> None:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
-
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="CLI bridge for Codex to call the local Talos tool server.")
@@ -97,7 +94,6 @@ def main() -> None:
         return
 
     raise SystemExit(f"Unknown command: {args.command}")
-
 
 if __name__ == "__main__":
     if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":

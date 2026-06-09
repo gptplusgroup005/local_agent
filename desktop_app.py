@@ -8,7 +8,6 @@ from typing import Any
 
 from talos.core import WEBVIEW_MIN_HEIGHT, WEBVIEW_MIN_WIDTH
 
-
 def run_desktop_shell() -> None:
     try:
         import webview
@@ -88,7 +87,6 @@ def run_desktop_shell() -> None:
     window_ref["window"] = window
     window.events.closed += on_closed
     webview.start(debug="--debug-webview" in sys.argv)
-
 
 if __name__ == "__main__":
     try:

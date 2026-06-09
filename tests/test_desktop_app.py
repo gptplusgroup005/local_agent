@@ -16,7 +16,6 @@ from talos.arduino import (
 from talos.core import language_label
 from talos.native_bridge import native_available
 
-
 class TalosArduinoTests(unittest.TestCase):
     def test_language_label_defaults_to_vietnamese(self) -> None:
         self.assertEqual(language_label({"language": "vi"}), "Tiếng Việt")
@@ -120,7 +119,6 @@ class TalosArduinoTests(unittest.TestCase):
 
             self.assertFalse(result["ok"])
             self.assertFalse((Path(tmp) / "outside.ino").exists())
-
 
 if __name__ == "__main__":
     unittest.main()

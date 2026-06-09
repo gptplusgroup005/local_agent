@@ -16,7 +16,6 @@ DLL_CANDIDATES = [
 TITLE_BUFFER_CHARS = 65536
 INO_BUFFER_CHARS = 4096
 
-
 def _load_library() -> ctypes.CDLL | None:
     if os.name != "nt":
         return None
@@ -30,13 +29,10 @@ def _load_library() -> ctypes.CDLL | None:
     library.talos_extract_ino_names.restype = ctypes.c_int
     return library
 
-
 _LIBRARY = _load_library()
-
 
 def native_available() -> bool:
     return _LIBRARY is not None
-
 
 def list_window_titles() -> list[str]:
     if _LIBRARY is None:
@@ -44,7 +40,6 @@ def list_window_titles() -> list[str]:
     buffer = ctypes.create_unicode_buffer(TITLE_BUFFER_CHARS)
     _LIBRARY.talos_list_window_titles(buffer, TITLE_BUFFER_CHARS)
     return [line for line in buffer.value.splitlines() if line.strip()]
-
 
 def extract_ino_names(title: str) -> list[str]:
     if _LIBRARY is not None:
