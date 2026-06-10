@@ -2,6 +2,8 @@ const state = {
   arduinoDirty: false,
   arduinoVerifyRunning: false,
   refreshPromise: null,
+  arduinoFqbnFull: "",
+  arduinoBoardName: "",
 };
 
 const THEMES = ["light", "dark", "neutral"];
@@ -49,6 +51,35 @@ function escapeHtml(value) {
   })[char]);
 }
 
+function compactBoardLabel(fqbn, boardName = "") {
+  if (boardName) return boardName;
+  if (!fqbn) return "";
+  return fqbn.split(":").slice(0, 3).join(":") || fqbn;
+}
+
+function boardInfoText(fqbn, boardName = "") {
+  if (!fqbn) return "No board details available.";
+  const parts = fqbn.split(":");
+  const base = parts.slice(0, 3).join(":");
+  const options = parts.slice(3).join(":");
+  const lines = [];
+  if (boardName) lines.push(`Board: ${boardName}`);
+  if (base) lines.push(`FQBN: ${base}`);
+  if (options) {
+    lines.push("", "Options:");
+    options.split(",").forEach((option) => lines.push(`- ${option}`));
+  }
+  return lines.join("\n");
+}
+
+function setBoardField(fqbn = "", boardName = "") {
+  state.arduinoFqbnFull = fqbn || "";
+  state.arduinoBoardName = boardName || state.arduinoBoardName || "";
+  $("#arduinoFqbnInput").value = compactBoardLabel(state.arduinoFqbnFull, state.arduinoBoardName);
+  $("#boardInfoPanel").textContent = boardInfoText(state.arduinoFqbnFull, state.arduinoBoardName);
+  $("#boardInfoBtn").disabled = !state.arduinoFqbnFull;
+}
+
 function renderStats(payload) {
   const arduino = payload.arduino || {};
   const projects = payload.arduino_projects || [];
@@ -63,11 +94,11 @@ function renderStats(payload) {
     .join("");
 }
 
-function renderArduino(arduino, force = false) {
+function renderArduino(arduino, force = false, ide = {}) {
   if (!arduino) return;
   if (!state.arduinoDirty || force) {
     $("#arduinoPathInput").value = arduino.path || "";
-    $("#arduinoFqbnInput").value = arduino.fqbn || "";
+    setBoardField(arduino.fqbn || "", ide.board_name || state.arduinoBoardName || "");
   }
   $("#arduinoStatus").textContent = arduino.message || "No Arduino sketch folder configured.";
   $("#arduinoMeta").textContent = arduino.valid
@@ -92,7 +123,6 @@ function renderArduinoProjects(projects = []) {
     <div class="project-row">
       <div>
         <div class="project-title">${escapeHtml(project.sketch || "Arduino sketch")} ${project.valid ? "" : "(folder not found)"}</div>
-        <div class="project-path">${escapeHtml(project.path || project.title || project.message || "")}</div>
       </div>
       <button class="button ghost select-project" data-index="${index}" ${project.valid ? "" : "disabled"}>Select</button>
     </div>
@@ -102,6 +132,7 @@ function renderArduinoProjects(projects = []) {
       const project = projects[Number(button.dataset.index)];
       if (!project?.path) return;
       $("#arduinoPathInput").value = project.path;
+      if (project.fqbn) setBoardField(project.fqbn, project.board_name || "");
       state.arduinoDirty = true;
       await saveArduinoWorkspace();
     });
@@ -112,7 +143,7 @@ function render(payload) {
   $("#modeLine").textContent = `${payload.role} | ${payload.root}`;
   $("#toolList").textContent = (payload.tools || []).join("\n");
   renderStats(payload);
-  renderArduino(payload.arduino);
+  renderArduino(payload.arduino, false, payload.arduino_ide || {});
   renderArduinoProjects(payload.arduino_projects || []);
   $("#logText").textContent = (payload.events || []).join("\n");
 }
@@ -132,7 +163,7 @@ async function saveArduinoWorkspace() {
     method: "POST",
     body: JSON.stringify({
       path: $("#arduinoPathInput").value,
-      fqbn: $("#arduinoFqbnInput").value,
+      fqbn: state.arduinoFqbnFull || $("#arduinoFqbnInput").value,
     }),
   });
   state.arduinoDirty = false;
@@ -150,7 +181,7 @@ async function verifyArduinoWorkspace() {
       method: "POST",
       body: JSON.stringify({
         path: $("#arduinoPathInput").value,
-        fqbn: $("#arduinoFqbnInput").value,
+        fqbn: state.arduinoFqbnFull || $("#arduinoFqbnInput").value,
       }),
     });
     $("#arduinoOutput").textContent = [
@@ -220,6 +251,12 @@ function bindEvents() {
   $("#refreshBtn").addEventListener("click", refresh);
   $("#saveArduinoBtn").addEventListener("click", saveArduinoWorkspace);
   $("#verifyArduinoBtn").addEventListener("click", verifyArduinoWorkspace);
+  $("#boardInfoBtn").addEventListener("click", () => {
+    const panel = $("#boardInfoPanel");
+    const isHidden = panel.hidden;
+    panel.hidden = !isHidden;
+    $("#boardInfoBtn").classList.toggle("active", isHidden);
+  });
   $$("#workspace input").forEach((input) => {
     input.addEventListener("input", () => {
       state.arduinoDirty = true;

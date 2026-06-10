@@ -71,6 +71,14 @@ def list_arduino_ide_processes() -> list[dict[str, object]]:
         return processes
     return list_arduino_ide_processes_powershell()
 
+def list_arduino_tool_processes() -> list[dict[str, object]]:
+    if os.name != "nt":
+        return []
+    processes = list_arduino_tool_processes_wmic()
+    if processes:
+        return processes
+    return list_arduino_tool_processes_powershell()
+
 def list_arduino_ide_processes_wmic() -> list[dict[str, object]]:
     command = [
         "cmd",
@@ -96,7 +104,33 @@ def list_arduino_ide_processes_wmic() -> list[dict[str, object]]:
             processes.append(process)
     return processes
 
-def arduino_process_row(command_line: str, process_id: str | int) -> dict[str, object] | None:
+def list_arduino_tool_processes_wmic() -> list[dict[str, object]]:
+    command = [
+        "cmd",
+        "/c",
+        "wmic process get Name,ProcessId,CommandLine /format:csv",
+    ]
+    try:
+        completed = subprocess.run(command, capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if completed.returncode != 0 or not completed.stdout.strip():
+        return []
+    processes: list[dict[str, object]] = []
+    pattern = re.compile(r"^[^,]*,(.*),(Arduino IDE|arduino-language-server|arduino-cli)\.exe,(\d+)$", re.IGNORECASE)
+    for raw_line in completed.stdout.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        match = pattern.match(line)
+        if match is None:
+            continue
+        process = arduino_process_row(match.group(1), match.group(3), name=f"{match.group(2)}.exe")
+        if process is not None:
+            processes.append(process)
+    return processes
+
+def arduino_process_row(command_line: str, process_id: str | int, name: str = "Arduino IDE.exe") -> dict[str, object] | None:
     try:
         pid = int(process_id)
     except (TypeError, ValueError):
@@ -104,11 +138,13 @@ def arduino_process_row(command_line: str, process_id: str | int) -> dict[str, o
     if not command_line:
         return None
     return {
-        "name": "Arduino IDE.exe",
+        "name": name,
         "pid": pid,
         "title": "",
         "command_line": command_line,
         "ino_paths": extract_ino_paths(command_line),
+        "fqbn": extract_fqbn(command_line),
+        "board_name": extract_board_name(command_line),
     }
 
 def list_arduino_ide_processes_powershell() -> list[dict[str, object]]:
@@ -138,6 +174,37 @@ def list_arduino_ide_processes_powershell() -> list[dict[str, object]]:
             processes.append(process)
     return processes
 
+def list_arduino_tool_processes_powershell() -> list[dict[str, object]]:
+    command = powershell_command(
+        "Get-CimInstance Win32_Process | "
+        "Where-Object { $_.Name -ieq 'Arduino IDE.exe' -or $_.Name -ieq 'arduino-language-server.exe' -or $_.Name -ieq 'arduino-cli.exe' } | "
+        "Select-Object Name,ProcessId,CommandLine | ConvertTo-Json -Compress"
+    )
+    try:
+        completed = subprocess.run(command, capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if completed.returncode != 0 or not completed.stdout.strip():
+        return []
+    try:
+        payload = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        return []
+    rows = payload if isinstance(payload, list) else [payload]
+    processes: list[dict[str, object]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        command_line = str(row.get("CommandLine") or row.get("command_line") or "")
+        process = arduino_process_row(
+            command_line,
+            row.get("ProcessId") or row.get("pid") or 0,
+            name=str(row.get("Name") or row.get("name") or ""),
+        )
+        if process is not None:
+            processes.append(process)
+    return processes
+
 def powershell_command(script: str) -> list[str]:
     encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
     return ["powershell", "-NoProfile", "-EncodedCommand", encoded]
@@ -154,6 +221,20 @@ def extract_ino_paths(text: str) -> list[str]:
         if path and path not in paths:
             paths.append(path)
     return paths
+
+def extract_fqbn(text: str) -> str:
+    match = re.search(r"(?i)(?:^|\s)-fqbn\s+([^\s\"]+)", text)
+    if match:
+        return match.group(1).strip()
+    match = re.search(r"(?i)(?:^|\s)--fqbn\s+([^\s\"]+)", text)
+    return match.group(1).strip() if match else ""
+
+def extract_board_name(text: str) -> str:
+    match = re.search(r'(?i)(?:^|\s)-board-name\s+"([^"]+)"', text)
+    if match:
+        return match.group(1).strip()
+    match = re.search(r"(?i)(?:^|\s)-board-name\s+([^\s]+)", text)
+    return match.group(1).strip() if match else ""
 
 def extract_ino_names(title: str) -> list[str]:
     if _LIBRARY is not None:

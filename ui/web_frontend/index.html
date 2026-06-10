@@ -73,7 +73,13 @@
             </div>
             <div class="form-grid">
               <label>Sketch Folder<input id="arduinoPathInput" placeholder="C:\Users\...\Documents\Arduino\Blink" /></label>
-              <label>Board FQBN<input id="arduinoFqbnInput" placeholder="arduino:avr:uno" /></label>
+              <label>Board
+                <div class="board-field">
+                  <input id="arduinoFqbnInput" placeholder="No board detected" readonly />
+                  <button id="boardInfoBtn" class="info-button" type="button" title="Board details" aria-label="Board details">i</button>
+                  <div id="boardInfoPanel" class="info-popover" hidden></div>
+                </div>
+              </label>
             </div>
             <p id="arduinoStatus" class="status-text">No Arduino sketch folder configured.</p>
             <div class="action-row">

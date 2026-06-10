@@ -14,7 +14,7 @@ from talos.arduino import (
     write_workspace_file,
 )
 from talos.core import language_label
-from talos.native_bridge import native_available
+from talos.native_bridge import extract_board_name, extract_fqbn, native_available
 
 
 class TalosArduinoTests(unittest.TestCase):
@@ -40,6 +40,16 @@ class TalosArduinoTests(unittest.TestCase):
         self.assertEqual(extract_ino_names("2.ino | Arduino IDE"), ["2.ino"])
         self.assertEqual(extract_ino_names("test | Arduino IDE 2.3.4"), ["test.ino"])
         self.assertIsInstance(native_available(), bool)
+
+    def test_native_bridge_extracts_board_from_language_server_command(self) -> None:
+        command = (
+            'arduino-language-server.exe -cli-daemon-addr localhost:51373 '
+            '-fqbn esp32:esp32:esp32:UploadSpeed=921600,CPUFreq=240 '
+            '-board-name "ESP32 Dev Module"'
+        )
+
+        self.assertEqual(extract_fqbn(command), "esp32:esp32:esp32:UploadSpeed=921600,CPUFreq=240")
+        self.assertEqual(extract_board_name(command), "ESP32 Dev Module")
 
     def test_arduino_discovery_maps_open_sketches_to_folders(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -117,6 +127,43 @@ class TalosArduinoTests(unittest.TestCase):
             self.assertEqual(projects[0]["sketch"], "test.ino")
             self.assertEqual(Path(projects[0]["path"]).name, "test")
             self.assertTrue(projects[0]["valid"])
+
+    def test_arduino_discovery_lists_multiple_open_ino_paths(self) -> None:
+        with TemporaryDirectory() as tmp:
+            first = Path(tmp) / "one"
+            second = Path(tmp) / "two"
+            first.mkdir()
+            second.mkdir()
+            one = first / "one.ino"
+            two = second / "two.ino"
+            one.write_text("void setup() {}\nvoid loop() {}\n", encoding="utf-8")
+            two.write_text("void setup() {}\nvoid loop() {}\n", encoding="utf-8")
+
+            projects = discover_arduino_projects({}, titles=[], ino_paths=[str(one), str(two)])
+
+            self.assertEqual([project["sketch"] for project in projects], ["one.ino", "two.ino"])
+
+    def test_arduino_discovery_attaches_detected_board_to_open_project(self) -> None:
+        with TemporaryDirectory() as tmp:
+            sketch = Path(tmp) / "test"
+            sketch.mkdir()
+            ino = sketch / "test.ino"
+            ino.write_text("void setup() {}\nvoid loop() {}\n", encoding="utf-8")
+
+            projects = discover_arduino_projects(
+                {},
+                titles=[],
+                ino_paths=[str(ino)],
+                tool_processes=[
+                    {
+                        "fqbn": "esp32:esp32:esp32:UploadSpeed=921600",
+                        "board_name": "ESP32 Dev Module",
+                    }
+                ],
+            )
+
+            self.assertEqual(projects[0]["fqbn"], "esp32:esp32:esp32:UploadSpeed=921600")
+            self.assertEqual(projects[0]["board_name"], "ESP32 Dev Module")
 
     def test_arduino_context_includes_sketch_files(self) -> None:
         with TemporaryDirectory() as tmp:

@@ -620,6 +620,61 @@ select {
   padding: 5px 12px;
 }
 
+.board-field {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 30px;
+  gap: 6px;
+  align-items: stretch;
+  margin-top: 6px;
+}
+
+.board-field input {
+  margin-top: 0;
+}
+
+.info-button {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--muted);
+  background: var(--canvas-subtle);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.info-button:hover,
+.info-button.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+}
+
+.info-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 20;
+  width: min(520px, 76vw);
+  max-height: 240px;
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--panel);
+  box-shadow: 0 8px 24px rgba(140, 149, 159, 0.2);
+  font-family: ui-monospace, SFMono-Regular, SFMono, Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 input[type="checkbox"] {
   width: 16px;
   height: 16px;
@@ -637,7 +692,9 @@ input[type="checkbox"] {
 }
 
 .theme-option {
+  position: relative;
   display: flex;
+  justify-content: space-between;
   align-items: center;
   gap: 8px;
   min-height: 44px;
@@ -646,6 +703,42 @@ input[type="checkbox"] {
   border-radius: 6px;
   background: var(--canvas-subtle);
   cursor: pointer;
+}
+
+.theme-option input[type="radio"] {
+  appearance: none;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--field);
+  box-shadow: inset 0 0 0 3px var(--field);
+  cursor: pointer;
+}
+
+.theme-option input[type="radio"]:checked {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.theme-option input[type="radio"]:focus {
+  outline: none;
+  box-shadow: inset 0 0 0 3px var(--field);
+}
+
+.theme-option:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(9, 105, 218, 0.12);
+}
+
+.theme-option:has(input[type="radio"]:checked) {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
 }
 
 .theme-option:hover {

@@ -10,6 +10,7 @@ from talos.core import ROOT
 from talos.native_bridge import (
     extract_ino_names,
     list_arduino_ide_processes,
+    list_arduino_tool_processes,
     list_window_titles,
     native_available,
 )
@@ -42,6 +43,8 @@ def open_window_titles() -> list[str]:
 
 def arduino_ide_status() -> dict[str, Any]:
     processes = list_arduino_ide_processes()
+    tool_processes = list_arduino_tool_processes()
+    board = detected_board(tool_processes)
     titles = [title for title in open_window_titles() if "arduino" in title.lower() or ".ino" in title.lower()]
     windows = [
         {"pid": process["pid"], "title": process["title"]}
@@ -55,8 +58,21 @@ def arduino_ide_status() -> dict[str, Any]:
     return {
         "running": bool(processes or titles),
         "process_count": len(processes),
+        "board_fqbn": board["fqbn"],
+        "board_name": board["board_name"],
         "windows": windows,
     }
+
+def detected_board(processes: list[dict[str, object]] | None = None) -> dict[str, str]:
+    rows = processes if processes is not None else list_arduino_tool_processes()
+    for process in rows:
+        fqbn = str(process.get("fqbn") or "").strip()
+        if fqbn:
+            return {
+                "fqbn": fqbn,
+                "board_name": str(process.get("board_name") or "").strip(),
+            }
+    return {"fqbn": "", "board_name": ""}
 
 def arduino_search_roots(config: dict[str, Any]) -> list[Path]:
     roots: list[Path] = []
@@ -104,27 +120,41 @@ def find_sketch_folder(sketch_name: str, roots: list[Path]) -> Path | None:
             continue
     return None
 
-def sketch_project_from_path(path_text: str, title: str = "") -> dict[str, Any] | None:
+def sketch_project_from_path(
+    path_text: str,
+    title: str = "",
+    board: dict[str, str] | None = None,
+    source: str = "process",
+) -> dict[str, Any] | None:
     path = resolve_workspace(path_text)
     if path is None or not path.exists() or not path.is_file() or path.suffix.lower() != ".ino":
         return None
     folder = path.parent.resolve()
+    board_info = board or {"fqbn": "", "board_name": ""}
     return {
         "title": title,
         "sketch": path.name,
         "path": str(folder),
+        "fqbn": board_info.get("fqbn", ""),
+        "board_name": board_info.get("board_name", ""),
         "valid": True,
         "native": native_available(),
-        "source": "process",
-        "message": "Open Arduino sketch found from Arduino IDE process.",
+        "source": source,
+        "message": "Open Arduino sketch found.",
     }
 
 def discover_arduino_projects(
     config: dict[str, Any],
     titles: list[str] | None = None,
     ino_paths: list[str] | None = None,
+    tool_processes: list[dict[str, object]] | None = None,
 ) -> list[dict[str, Any]]:
-    processes = [] if titles is not None or ino_paths is not None else list_arduino_ide_processes()
+    implicit_detection = titles is None and ino_paths is None and tool_processes is None
+    processes = list_arduino_ide_processes() if implicit_detection else []
+    arduino_processes = tool_processes if tool_processes is not None else (
+        list_arduino_tool_processes() if implicit_detection else []
+    )
+    board = detected_board(arduino_processes)
     window_titles = titles if titles is not None else []
     if titles is None:
         window_titles.extend(
@@ -135,17 +165,19 @@ def discover_arduino_projects(
         for title in open_window_titles():
             if title not in window_titles:
                 window_titles.append(title)
-    open_ino_paths = ino_paths if ino_paths is not None else [
-        path
-        for process in processes
-        for path in process.get("ino_paths", [])
-        if isinstance(path, str)
-    ]
+    open_ino_paths = ino_paths if ino_paths is not None else []
+    path_sources: dict[str, str] = {}
+    if implicit_detection:
+        for process in processes:
+            for path in process.get("ino_paths", []):
+                if isinstance(path, str):
+                    open_ino_paths.append(path)
+                    path_sources[path] = "process"
     roots = arduino_search_roots(config)
     projects: list[dict[str, Any]] = []
     seen: set[str] = set()
     for path_text in open_ino_paths:
-        project = sketch_project_from_path(path_text)
+        project = sketch_project_from_path(path_text, board=board, source=path_sources.get(path_text, "process"))
         if project is None:
             continue
         key = str(Path(project["path"]).resolve()).lower()
@@ -168,6 +200,8 @@ def discover_arduino_projects(
                     "title": title,
                     "sketch": sketch,
                     "path": str(folder) if folder else "",
+                    "fqbn": board["fqbn"],
+                    "board_name": board["board_name"],
                     "valid": folder is not None,
                     "native": native_available(),
                     "source": "window_title",

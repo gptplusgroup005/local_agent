@@ -1,5 +1,5 @@
 {
   "language": "auto",
-  "arduino_workspace_path": "C:\\Users\\Admin\\Desktop\\test",
-  "arduino_fqbn": "ESP32 Dev Module"
+  "arduino_workspace_path": "C:\\Users\\Admin\\Desktop\\test\\velo_test",
+  "arduino_fqbn": "esp32:esp32:esp32:UploadSpeed=921600,CPUFreq=240,FlashFreq=80,FlashMode=qio,FlashSize=4M,PartitionScheme=default,DebugLevel=none,PSRAM=disabled,LoopCore=1,EventsCore=1,EraseFlash=none,JTAGAdapter=default,ZigbeeMode=default"
 }
