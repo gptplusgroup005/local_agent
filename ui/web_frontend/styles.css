@@ -301,7 +301,9 @@ body {
   display: grid;
   grid-template-rows: auto 1fr;
   min-width: 0;
+  min-height: 0;
   padding: 24px 32px;
+  overflow: hidden;
   background: var(--bg);
 }
 
@@ -335,11 +337,16 @@ h1 {
 .view {
   display: none;
   min-height: 0;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .view.active {
-  display: grid;
-  grid-template-rows: auto 1fr;
+  display: block;
+  height: 100%;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
 }
 
 .stats {
@@ -377,8 +384,10 @@ table {
 
 .holo-panel {
   position: relative;
+  max-width: 100%;
   min-height: 0;
   padding: 16px;
+  overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--panel);
@@ -394,6 +403,7 @@ table {
 .settings-panel,
 .workspace-panel {
   min-height: 0;
+  max-height: 100%;
 }
 
 .panel-title {
@@ -401,6 +411,19 @@ table {
   font-size: 12px;
   font-weight: 600;
   text-transform: uppercase;
+}
+
+.panel-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  margin-bottom: 10px;
+}
+
+.panel-head .panel-title {
+  margin-bottom: 0;
 }
 
 textarea,
@@ -436,13 +459,19 @@ textarea:focus {
 .action-row,
 .switch-row {
   justify-content: space-between;
+  flex-wrap: wrap;
 }
 
 .button-row {
   margin-top: 0;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .action-row p {
+  min-width: 220px;
+  flex: 1 1 280px;
   margin: 0;
   color: var(--muted);
   font-size: 13px;
@@ -468,6 +497,25 @@ textarea:focus {
 
 .button.ghost {
   padding: 5px 12px;
+}
+
+.icon-button {
+  min-height: 26px;
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--muted);
+  background: var(--canvas-subtle);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.icon-button:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-subtle);
 }
 
 .button:disabled {
@@ -500,16 +548,22 @@ textarea:focus {
   display: grid;
   grid-template-rows: auto auto auto auto auto 1fr;
   gap: 0;
-  overflow: hidden;
+  overflow: auto;
+  overscroll-behavior: contain;
 }
 
 .detected-panel {
   margin-bottom: 16px;
+  min-height: 0;
 }
 
 .project-list {
   display: grid;
   gap: 8px;
+  max-height: clamp(132px, 28vh, 276px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
 }
 
 .project-row {
@@ -543,13 +597,17 @@ textarea:focus {
   grid-template-columns: minmax(320px, 0.9fr) minmax(360px, 1.1fr);
   gap: 16px;
   min-height: 0;
-  margin-top: 16px;
+  max-width: 100%;
+  margin-top: 20px;
+  overflow: hidden;
 }
 
 .workspace-files,
 .workspace-output {
   min-height: 0;
+  max-height: min(34vh, 320px);
   overflow: auto;
+  user-select: text;
 }
 
 .workspace-output {
@@ -561,9 +619,112 @@ textarea:focus {
   min-height: 0;
 }
 
+.verify-output {
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  gap: 10px;
+  min-height: 180px;
+  max-width: 100%;
+  padding: 12px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--canvas-inset);
+  user-select: text;
+}
+
+.verify-output.empty,
+.verify-output.pending {
+  display: grid;
+  place-items: center start;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.verify-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.verify-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text);
+  background: var(--panel);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.verify-output.passed .verify-badge {
+  color: #ffffff;
+  border-color: var(--green);
+  background: var(--green);
+}
+
+.verify-output.failed .verify-badge {
+  color: #ffffff;
+  border-color: var(--danger);
+  background: var(--danger);
+}
+
+.verify-command-name {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.verify-field {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  min-width: 0;
+}
+
+.verify-field span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.verify-field code {
+  min-width: 0;
+  padding: 2px 0;
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, SFMono, Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  user-select: text;
+}
+
+.verify-log {
+  min-height: 0;
+  padding: 10px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  background: var(--panel);
+  user-select: text;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
+  user-select: text;
 }
 
 th,
@@ -586,6 +747,7 @@ tr:hover td {
 
 pre {
   min-height: 120px;
+  max-width: 100%;
   margin: 0;
   padding: 12px;
   overflow: auto;
@@ -597,7 +759,8 @@ pre {
 }
 
 .log-panel pre {
-  min-height: 60vh;
+  height: min(64vh, 680px);
+  min-height: 260px;
 }
 
 .form-grid {
@@ -616,8 +779,11 @@ input,
 select {
   display: block;
   min-height: 34px;
+  min-width: 0;
   margin-top: 6px;
   padding: 5px 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .board-field {
@@ -749,12 +915,12 @@ input[type="checkbox"] {
 @media (max-width: 900px) {
   body {
     min-width: 0;
-    overflow: auto;
+    overflow: hidden;
   }
 
   .scene {
     grid-template-columns: 1fr;
-    height: auto;
+    height: calc(100vh - 42px);
     min-height: calc(100vh - 42px);
   }
 
@@ -778,5 +944,14 @@ input[type="checkbox"] {
   .form-grid,
   .workspace-grid {
     grid-template-columns: 1fr;
+  }
+
+  .shell {
+    padding: 16px;
+  }
+
+  .workspace-files,
+  .workspace-output {
+    max-height: 300px;
   }
 }

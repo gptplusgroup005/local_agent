@@ -48,6 +48,8 @@ def worker_loop() -> None:
 
 def state_payload() -> dict[str, Any]:
     config = load_config()
+    arduino_projects = discover_arduino_projects(config)
+    arduino_summary = workspace_summary(config)
     return {
         "name": "Talos",
         "role": "Codex local tool server",
@@ -57,12 +59,13 @@ def state_payload() -> dict[str, Any]:
         "native_available": native_available(),
         "config": {
             "language": config.get("language", "vi"),
+            "theme": config.get("theme", "light"),
             "arduino_workspace_path": config.get("arduino_workspace_path", ""),
             "arduino_fqbn": config.get("arduino_fqbn", ""),
         },
-        "arduino": workspace_summary(config),
+        "arduino": arduino_summary,
         "arduino_ide": arduino_ide_status(),
-        "arduino_projects": discover_arduino_projects(config),
+        "arduino_projects": arduino_projects,
         "tools": [
             "GET /api/state",
             "GET /api/arduino_context",
@@ -108,12 +111,12 @@ class LocalAgentWebHandler(BaseHTTPRequestHandler):
         payload = self.read_json()
         if self.path == "/api/settings":
             config = load_config()
-            for key in ("language", "arduino_workspace_path", "arduino_fqbn"):
+            for key in ("language", "theme", "arduino_workspace_path", "arduino_fqbn"):
                 if key in payload:
                     config[key] = str(payload[key]).strip()
             save_config(config)
             log_event(f"{now()} saved settings")
-            self.send_json({"ok": True})
+            self.send_json({"ok": True, "config": load_config()})
             return
         if self.path == "/api/arduino_workspace":
             config = load_config()
@@ -184,9 +187,14 @@ class LocalAgentWebHandler(BaseHTTPRequestHandler):
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-        data = path.read_bytes()
+        if path.name == "index.html":
+            theme = str(load_config().get("theme", "light"))
+            data = path.read_text(encoding="utf-8").replace("__TALOS_THEME__", theme).encode("utf-8")
+        else:
+            data = path.read_bytes()
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", content_type)
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)

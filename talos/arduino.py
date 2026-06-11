@@ -28,6 +28,11 @@ IGNORED_DIRS = {
 MAX_CONTEXT_BYTES = 64_000
 MAX_FILE_BYTES = 128_000
 SANDBOX_ROOT = ROOT / ".talos_sandbox" / "arduino"
+ARDUINO_CLI_CANDIDATES = [
+    Path.home() / "AppData" / "Local" / "Programs" / "Arduino IDE" / "resources" / "app" / "lib" / "backend" / "resources" / "arduino-cli.exe",
+    Path("C:/Program Files/Arduino IDE/resources/app/lib/backend/resources/arduino-cli.exe"),
+    Path("C:/Program Files (x86)/Arduino IDE/resources/app/lib/backend/resources/arduino-cli.exe"),
+]
 
 def arduino_config(config: dict[str, Any]) -> dict[str, str]:
     return {
@@ -41,11 +46,17 @@ def is_source_file(path: Path) -> bool:
 def open_window_titles() -> list[str]:
     return list_window_titles()
 
-def arduino_ide_status() -> dict[str, Any]:
-    processes = list_arduino_ide_processes()
-    tool_processes = list_arduino_tool_processes()
+def arduino_ide_status(
+    processes: list[dict[str, object]] | None = None,
+    tool_processes: list[dict[str, object]] | None = None,
+    titles: list[str] | None = None,
+) -> dict[str, Any]:
+    processes = processes if processes is not None else list_arduino_ide_processes()
+    tool_processes = tool_processes if tool_processes is not None else list_arduino_tool_processes()
     board = detected_board(tool_processes)
-    titles = [title for title in open_window_titles() if "arduino" in title.lower() or ".ino" in title.lower()]
+    titles = titles if titles is not None else [
+        title for title in open_window_titles() if "arduino" in title.lower() or ".ino" in title.lower()
+    ]
     windows = [
         {"pid": process["pid"], "title": process["title"]}
         for process in processes
@@ -74,11 +85,89 @@ def detected_board(processes: list[dict[str, object]] | None = None) -> dict[str
             }
     return {"fqbn": "", "board_name": ""}
 
-def arduino_search_roots(config: dict[str, Any]) -> list[Path]:
+def detected_boards(processes: list[dict[str, object]] | None = None) -> list[dict[str, str]]:
+    rows = processes if processes is not None else list_arduino_tool_processes()
+    boards: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for process in rows:
+        fqbn = str(process.get("fqbn") or "").strip()
+        if not fqbn:
+            continue
+        key = fqbn.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        boards.append(
+            {
+                "fqbn": fqbn,
+                "board_name": str(process.get("board_name") or "").strip(),
+            }
+        )
+    return boards
+
+def board_match_tokens(board: dict[str, str]) -> list[str]:
+    fqbn = board.get("fqbn", "")
+    board_name = board.get("board_name", "")
+    tokens: list[str] = []
+    parts = fqbn.split(":")
+    if len(parts) >= 3:
+        tokens.append(parts[2])
+    for part in board_name.split():
+        tokens.append(part)
+    normalized: list[str] = []
+    for token in tokens:
+        clean = "".join(char.lower() for char in token if char.isalnum())
+        if len(clean) >= 4 and clean not in normalized:
+            normalized.append(clean)
+    return normalized
+
+def match_project_board(project: dict[str, Any], boards: list[dict[str, str]]) -> dict[str, str]:
+    if not boards:
+        return {"fqbn": "", "board_name": ""}
+    if len(boards) == 1:
+        return boards[0]
+    text = " ".join(
+        str(project.get(key, ""))
+        for key in ("title", "sketch", "path")
+    )
+    normalized_text = "".join(char.lower() if char.isalnum() else " " for char in text)
+    compact_text = normalized_text.replace(" ", "")
+    scored: list[tuple[int, dict[str, str]]] = []
+    for board in boards:
+        score = 0
+        for token in board_match_tokens(board):
+            if token in compact_text:
+                score += 3 + len(token)
+            elif token in normalized_text.split():
+                score += 2 + len(token)
+        scored.append((score, board))
+    scored.sort(key=lambda item: item[0], reverse=True)
+    if scored and scored[0][0] > 0:
+        return scored[0][1]
+    return boards[0]
+
+def apply_project_board(project: dict[str, Any], boards: list[dict[str, str]]) -> dict[str, Any]:
+    board = match_project_board(project, boards)
+    project["fqbn"] = board.get("fqbn", "")
+    project["board_name"] = board.get("board_name", "")
+    return project
+
+def append_root_with_ancestors(roots: list[Path], root: Path, levels: int = 2) -> None:
+    current = root
+    for _index in range(levels + 1):
+        roots.append(current)
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+
+def arduino_search_roots(config: dict[str, Any], extra_roots: list[Path] | None = None) -> list[Path]:
     roots: list[Path] = []
     configured = configured_workspace(config)
     if configured is not None:
-        roots.append(configured.parent)
+        append_root_with_ancestors(roots, configured, levels=2)
+    for root in extra_roots or []:
+        append_root_with_ancestors(roots, root, levels=2)
     for raw_root in str(config.get("arduino_search_roots", "")).split(";"):
         root = resolve_workspace(raw_root)
         if root is not None:
@@ -108,6 +197,8 @@ def find_sketch_folder(sketch_name: str, roots: list[Path]) -> Path | None:
     sketch_path = Path(sketch_name)
     folder_name = sketch_path.stem
     for root in roots:
+        if (root / sketch_path.name).exists():
+            return root.resolve()
         direct = root / folder_name
         if (direct / sketch_path.name).exists():
             return direct.resolve()
@@ -123,20 +214,18 @@ def find_sketch_folder(sketch_name: str, roots: list[Path]) -> Path | None:
 def sketch_project_from_path(
     path_text: str,
     title: str = "",
-    board: dict[str, str] | None = None,
     source: str = "process",
 ) -> dict[str, Any] | None:
     path = resolve_workspace(path_text)
     if path is None or not path.exists() or not path.is_file() or path.suffix.lower() != ".ino":
         return None
     folder = path.parent.resolve()
-    board_info = board or {"fqbn": "", "board_name": ""}
     return {
         "title": title,
         "sketch": path.name,
         "path": str(folder),
-        "fqbn": board_info.get("fqbn", ""),
-        "board_name": board_info.get("board_name", ""),
+        "fqbn": "",
+        "board_name": "",
         "valid": True,
         "native": native_available(),
         "source": source,
@@ -154,7 +243,7 @@ def discover_arduino_projects(
     arduino_processes = tool_processes if tool_processes is not None else (
         list_arduino_tool_processes() if implicit_detection else []
     )
-    board = detected_board(arduino_processes)
+    boards = detected_boards(arduino_processes)
     window_titles = titles if titles is not None else []
     if titles is None:
         window_titles.extend(
@@ -165,7 +254,7 @@ def discover_arduino_projects(
         for title in open_window_titles():
             if title not in window_titles:
                 window_titles.append(title)
-    open_ino_paths = ino_paths if ino_paths is not None else []
+    open_ino_paths = list(ino_paths or [])
     path_sources: dict[str, str] = {}
     if implicit_detection:
         for process in processes:
@@ -173,13 +262,19 @@ def discover_arduino_projects(
                 if isinstance(path, str):
                     open_ino_paths.append(path)
                     path_sources[path] = "process"
-    roots = arduino_search_roots(config)
+    path_roots: list[Path] = []
+    for path_text in open_ino_paths:
+        path = resolve_workspace(path_text)
+        if path is not None:
+            path_roots.append(path.parent if path.suffix else path)
+    roots = arduino_search_roots(config, extra_roots=path_roots)
     projects: list[dict[str, Any]] = []
     seen: set[str] = set()
     for path_text in open_ino_paths:
-        project = sketch_project_from_path(path_text, board=board, source=path_sources.get(path_text, "process"))
+        project = sketch_project_from_path(path_text, source=path_sources.get(path_text, "process"))
         if project is None:
             continue
+        apply_project_board(project, boards)
         key = str(Path(project["path"]).resolve()).lower()
         if key in seen:
             continue
@@ -195,19 +290,18 @@ def discover_arduino_projects(
             if key in seen:
                 continue
             seen.add(key)
-            projects.append(
-                {
-                    "title": title,
-                    "sketch": sketch,
-                    "path": str(folder) if folder else "",
-                    "fqbn": board["fqbn"],
-                    "board_name": board["board_name"],
-                    "valid": folder is not None,
-                    "native": native_available(),
-                    "source": "window_title",
-                    "message": "Sketch folder found." if folder else "Open Arduino sketch detected, but matching folder was not found in search roots.",
-                }
-            )
+            project = {
+                "title": title,
+                "sketch": sketch,
+                "path": str(folder) if folder else "",
+                "fqbn": "",
+                "board_name": "",
+                "valid": folder is not None,
+                "native": native_available(),
+                "source": "window_title",
+                "message": "Sketch folder found." if folder else "Open Arduino sketch detected, but matching folder was not found in search roots.",
+            }
+            projects.append(apply_project_board(project, boards))
     return projects
 
 def resolve_workspace(path_text: str) -> Path | None:
@@ -385,7 +479,7 @@ def workspace_context(config: dict[str, Any], max_bytes: int = MAX_CONTEXT_BYTES
 
 def copy_workspace_to_sandbox(workspace: Path) -> Path:
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    target = SANDBOX_ROOT / f"{workspace.name}_{stamp}"
+    target = SANDBOX_ROOT / stamp / workspace.name
     target.parent.mkdir(parents=True, exist_ok=True)
 
     def ignore(_dir: str, names: list[str]) -> set[str]:
@@ -398,6 +492,18 @@ def copy_workspace_to_sandbox(workspace: Path) -> Path:
     shutil.copytree(workspace, target, ignore=ignore)
     return target
 
+def find_arduino_cli() -> str | None:
+    cli = shutil.which("arduino-cli")
+    if cli is not None:
+        return cli
+    for candidate in ARDUINO_CLI_CANDIDATES:
+        try:
+            if candidate.exists() and candidate.is_file():
+                return str(candidate)
+        except OSError:
+            continue
+    return None
+
 def run_arduino_compile(config: dict[str, Any], timeout: int = 120) -> dict[str, Any]:
     summary = workspace_summary(config)
     if not summary["valid"]:
@@ -409,13 +515,13 @@ def run_arduino_compile(config: dict[str, Any], timeout: int = 120) -> dict[str,
             "summary": summary,
             "output": "Set an Arduino FQBN first, for example arduino:avr:uno.",
         }
-    cli = shutil.which("arduino-cli")
+    cli = find_arduino_cli()
     if cli is None:
         return {
             "ok": False,
             "status": "missing_cli",
             "summary": summary,
-            "output": "arduino-cli was not found in PATH.",
+            "output": "arduino-cli was not found in PATH or in the Arduino IDE bundled resources folder.",
         }
     workspace = Path(summary["path"])
     sandbox = copy_workspace_to_sandbox(workspace)

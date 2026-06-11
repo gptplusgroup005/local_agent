@@ -143,6 +143,30 @@ class TalosArduinoTests(unittest.TestCase):
 
             self.assertEqual([project["sketch"] for project in projects], ["one.ino", "two.ino"])
 
+    def test_arduino_discovery_combines_process_paths_and_window_titles(self) -> None:
+        with TemporaryDirectory() as tmp:
+            desktop = Path(tmp) / "Desktop"
+            parent = desktop / "test"
+            title_sketch = parent
+            process_sketch = parent / "mpu6050"
+            configured_sketch = parent / "velo_test"
+            title_sketch.mkdir(parents=True)
+            process_sketch.mkdir()
+            configured_sketch.mkdir()
+            (title_sketch / "test.ino").write_text("void setup() {}\nvoid loop() {}\n", encoding="utf-8")
+            process_ino = process_sketch / "mpu6050.ino"
+            process_ino.write_text("void setup() {}\nvoid loop() {}\n", encoding="utf-8")
+            (configured_sketch / "velo_test.ino").write_text("void setup() {}\nvoid loop() {}\n", encoding="utf-8")
+
+            projects = discover_arduino_projects(
+                {"arduino_workspace_path": str(configured_sketch)},
+                titles=["test | Arduino IDE 2.3.4"],
+                ino_paths=[str(process_ino)],
+            )
+
+            self.assertEqual([project["sketch"] for project in projects], ["mpu6050.ino", "test.ino"])
+            self.assertTrue(all(project["valid"] for project in projects))
+
     def test_arduino_discovery_attaches_detected_board_to_open_project(self) -> None:
         with TemporaryDirectory() as tmp:
             sketch = Path(tmp) / "test"
@@ -164,6 +188,36 @@ class TalosArduinoTests(unittest.TestCase):
 
             self.assertEqual(projects[0]["fqbn"], "esp32:esp32:esp32:UploadSpeed=921600")
             self.assertEqual(projects[0]["board_name"], "ESP32 Dev Module")
+
+    def test_arduino_discovery_matches_board_by_sketch_name_hint(self) -> None:
+        with TemporaryDirectory() as tmp:
+            first = Path(tmp) / "mpu6050"
+            second = Path(tmp) / "mpu6050_esp32c3"
+            first.mkdir()
+            second.mkdir()
+            first_ino = first / "mpu6050.ino"
+            second_ino = second / "mpu6050_esp32c3.ino"
+            first_ino.write_text("void setup() {}\nvoid loop() {}\n", encoding="utf-8")
+            second_ino.write_text("void setup() {}\nvoid loop() {}\n", encoding="utf-8")
+
+            projects = discover_arduino_projects(
+                {},
+                titles=[],
+                ino_paths=[str(first_ino), str(second_ino)],
+                tool_processes=[
+                    {
+                        "fqbn": "esp32:esp32:esp32:UploadSpeed=921600",
+                        "board_name": "ESP32 Dev Module",
+                    },
+                    {
+                        "fqbn": "esp32:esp32:esp32c3:UploadSpeed=921600",
+                        "board_name": "ESP32C3 Dev Module",
+                    },
+                ],
+            )
+
+            self.assertEqual(projects[0]["board_name"], "ESP32 Dev Module")
+            self.assertEqual(projects[1]["board_name"], "ESP32C3 Dev Module")
 
     def test_arduino_context_includes_sketch_files(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -197,6 +251,7 @@ class TalosArduinoTests(unittest.TestCase):
 
             sandbox = copy_workspace_to_sandbox(root)
 
+            self.assertEqual(sandbox.name, "Blink")
             self.assertTrue((sandbox / "Blink.ino").exists())
             self.assertFalse((sandbox / "build").exists())
 

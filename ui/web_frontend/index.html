@@ -6,7 +6,7 @@
     <title>Talos</title>
     <script>
       (() => {
-        const theme = localStorage.getItem("talos-theme");
+        const theme = "__TALOS_THEME__";
         if (["light", "dark", "neutral"].includes(theme)) document.documentElement.dataset.theme = theme;
       })();
     </script>
@@ -91,6 +91,10 @@
             </div>
             <div class="workspace-grid">
               <div class="holo-panel table-panel workspace-files">
+                <div class="panel-head">
+                  <div class="panel-title">Files</div>
+                  <button id="copyFilesBtn" class="icon-button" type="button" title="Copy file list" aria-label="Copy file list">Copy</button>
+                </div>
                 <table>
                   <thead>
                     <tr>
@@ -103,8 +107,11 @@
                 </table>
               </div>
               <div class="holo-panel detail-panel workspace-output">
-                <div class="panel-title">Verify output</div>
-                <pre id="arduinoOutput">Sandbox compile has not been run.</pre>
+                <div class="panel-head">
+                  <div class="panel-title">Verify output</div>
+                  <button id="copyVerifyBtn" class="icon-button" type="button" title="Copy verify output" aria-label="Copy verify output">Copy</button>
+                </div>
+                <div id="arduinoOutput" class="verify-output empty">Sandbox compile has not been run.</div>
               </div>
             </div>
           </div>
@@ -124,6 +131,10 @@
               <label class="theme-option"><input type="radio" name="theme" value="light" /> Light</label>
               <label class="theme-option"><input type="radio" name="theme" value="dark" /> Dark</label>
               <label class="theme-option"><input type="radio" name="theme" value="neutral" /> Neutral</label>
+            </div>
+            <div class="action-row settings-actions">
+              <p id="settingsStatus">Theme changes apply immediately.</p>
+              <button id="saveSettingsBtn" class="button primary" type="button">Save</button>
             </div>
           </div>
         </section>

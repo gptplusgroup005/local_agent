@@ -4,6 +4,8 @@ const state = {
   refreshPromise: null,
   arduinoFqbnFull: "",
   arduinoBoardName: "",
+  themeHydrated: false,
+  lastVerifyText: "Sandbox compile has not been run.",
 };
 
 const THEMES = ["light", "dark", "neutral"];
@@ -29,6 +31,10 @@ function setView(viewId) {
 }
 
 function currentTheme() {
+  const checked = document.querySelector('input[name="theme"]:checked')?.value;
+  if (THEMES.includes(checked)) return checked;
+  const active = document.documentElement.dataset.theme;
+  if (THEMES.includes(active)) return active;
   const stored = localStorage.getItem(THEME_KEY);
   return THEMES.includes(stored) ? stored : "light";
 }
@@ -39,6 +45,17 @@ function applyTheme(theme) {
   localStorage.setItem(THEME_KEY, nextTheme);
   const input = document.querySelector(`input[name="theme"][value="${nextTheme}"]`);
   if (input) input.checked = true;
+}
+
+function hydrateTheme(config = {}) {
+  if (state.themeHydrated) return;
+  state.themeHydrated = true;
+  if (THEMES.includes(config.theme)) {
+    applyTheme(config.theme);
+    return;
+  }
+  const stored = localStorage.getItem(THEME_KEY);
+  if (THEMES.includes(stored)) applyTheme(stored);
 }
 
 function escapeHtml(value) {
@@ -72,9 +89,65 @@ function boardInfoText(fqbn, boardName = "") {
   return lines.join("\n");
 }
 
+function commandBaseName(command = "") {
+  const head = String(command).trim().split(/\s+/)[0] || "";
+  return head.split(/[\\/]/).pop() || head;
+}
+
+function renderVerifyOutput(result = null, pendingText = "") {
+  const output = $("#arduinoOutput");
+  if (!result) {
+    output.className = `verify-output ${pendingText ? "pending" : "empty"}`;
+    state.lastVerifyText = pendingText || "Sandbox compile has not been run.";
+    output.textContent = state.lastVerifyText;
+    return;
+  }
+  const ok = Boolean(result.ok);
+  const status = result.status || (ok ? "passed" : "failed");
+  const command = result.command || "";
+  const sandbox = result.sandbox || "";
+  state.lastVerifyText = [
+    `Status: ${status}`,
+    command ? `Command: ${command}` : "",
+    sandbox ? `Sandbox: ${sandbox}` : "",
+    "",
+    result.output || "No compiler output.",
+  ].filter(Boolean).join("\n");
+  output.className = `verify-output ${ok ? "passed" : "failed"}`;
+  output.innerHTML = `
+    <div class="verify-head">
+      <span class="verify-badge">${escapeHtml(status)}</span>
+      <span class="verify-command-name">${escapeHtml(commandBaseName(command) || "arduino-cli")}</span>
+    </div>
+    ${command ? `<div class="verify-field"><span>Command</span><code>${escapeHtml(command)}</code></div>` : ""}
+    ${sandbox ? `<div class="verify-field"><span>Sandbox</span><code>${escapeHtml(sandbox)}</code></div>` : ""}
+    <pre class="verify-log">${escapeHtml(result.output || "No compiler output.")}</pre>
+  `;
+}
+
+async function copyText(text, statusSelector = "") {
+  const value = String(text || "").trim();
+  if (!value) return;
+  await navigator.clipboard.writeText(value);
+  if (statusSelector) {
+    const status = $(statusSelector);
+    if (status) {
+      const previous = status.textContent;
+      status.textContent = "Copied.";
+      window.setTimeout(() => {
+        status.textContent = previous;
+      }, 1200);
+    }
+  }
+}
+
+function fileListText() {
+  return $$("#arduinoFiles tr").map((row) => [...row.children].map((cell) => cell.textContent.trim()).join("\t")).join("\n");
+}
+
 function setBoardField(fqbn = "", boardName = "") {
   state.arduinoFqbnFull = fqbn || "";
-  state.arduinoBoardName = boardName || state.arduinoBoardName || "";
+  state.arduinoBoardName = boardName || "";
   $("#arduinoFqbnInput").value = compactBoardLabel(state.arduinoFqbnFull, state.arduinoBoardName);
   $("#boardInfoPanel").textContent = boardInfoText(state.arduinoFqbnFull, state.arduinoBoardName);
   $("#boardInfoBtn").disabled = !state.arduinoFqbnFull;
@@ -140,11 +213,17 @@ function renderArduinoProjects(projects = []) {
 }
 
 function render(payload) {
+  hydrateTheme(payload.config || {});
+  const projects = payload.arduino_projects || [];
+  const arduino = payload.arduino || {};
+  const selectedProject = projects.find((project) => project.path === arduino.path && project.fqbn === arduino.fqbn)
+    || projects.find((project) => project.path === arduino.path)
+    || {};
   $("#modeLine").textContent = `${payload.role} | ${payload.root}`;
   $("#toolList").textContent = (payload.tools || []).join("\n");
   renderStats(payload);
-  renderArduino(payload.arduino, false, payload.arduino_ide || {});
-  renderArduinoProjects(payload.arduino_projects || []);
+  renderArduino(arduino, false, selectedProject);
+  renderArduinoProjects(projects);
   $("#logText").textContent = (payload.events || []).join("\n");
 }
 
@@ -173,7 +252,7 @@ async function saveArduinoWorkspace() {
 }
 
 async function verifyArduinoWorkspace() {
-  $("#arduinoOutput").textContent = "Copying sketch folder to sandbox and running arduino-cli compile...";
+  renderVerifyOutput(null, "Copying sketch folder to sandbox and running arduino-cli compile...");
   state.arduinoVerifyRunning = true;
   $("#verifyArduinoBtn").disabled = true;
   try {
@@ -184,13 +263,7 @@ async function verifyArduinoWorkspace() {
         fqbn: state.arduinoFqbnFull || $("#arduinoFqbnInput").value,
       }),
     });
-    $("#arduinoOutput").textContent = [
-      `Status: ${result.status}`,
-      result.command ? `Command: ${result.command}` : "",
-      result.sandbox ? `Sandbox: ${result.sandbox}` : "",
-      "",
-      result.output || "",
-    ].filter(Boolean).join("\n");
+    renderVerifyOutput(result);
     state.arduinoDirty = false;
     await refresh();
     return result;
@@ -198,6 +271,15 @@ async function verifyArduinoWorkspace() {
     state.arduinoVerifyRunning = false;
     $("#verifyArduinoBtn").disabled = false;
   }
+}
+
+async function saveSettings() {
+  const result = await api("/api/settings", {
+    method: "POST",
+    body: JSON.stringify({ theme: currentTheme() }),
+  });
+  $("#settingsStatus").textContent = `Saved ${result.config?.theme || currentTheme()} theme.`;
+  return result;
 }
 
 function setMaximizeIcon(maximized) {
@@ -246,11 +328,13 @@ async function snapWindow(kind) {
 }
 
 function bindEvents() {
-  applyTheme(currentTheme());
   $$(".nav").forEach((button) => button.addEventListener("click", () => setView(button.dataset.view)));
   $("#refreshBtn").addEventListener("click", refresh);
   $("#saveArduinoBtn").addEventListener("click", saveArduinoWorkspace);
   $("#verifyArduinoBtn").addEventListener("click", verifyArduinoWorkspace);
+  $("#saveSettingsBtn").addEventListener("click", saveSettings);
+  $("#copyFilesBtn").addEventListener("click", () => copyText(fileListText(), "#arduinoMeta"));
+  $("#copyVerifyBtn").addEventListener("click", () => copyText(state.lastVerifyText));
   $("#boardInfoBtn").addEventListener("click", () => {
     const panel = $("#boardInfoPanel");
     const isHidden = panel.hidden;
@@ -266,6 +350,7 @@ function bindEvents() {
   $$('input[name="theme"]').forEach((input) => {
     input.addEventListener("change", () => {
       if (input.checked) applyTheme(input.value);
+      $("#settingsStatus").textContent = "Theme changed. Save to keep it for next launch.";
     });
   });
   $(".app-chrome").addEventListener("dblclick", (event) => {
@@ -288,4 +373,6 @@ function bindEvents() {
 
 bindEvents();
 refresh();
-setInterval(refresh, 1800);
+setInterval(() => {
+  if (!document.hidden) refresh();
+}, 5000);

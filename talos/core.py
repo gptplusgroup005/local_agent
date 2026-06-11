@@ -18,6 +18,7 @@ WEBVIEW_MIN_HEIGHT = 420
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "language": "vi",
+    "theme": "light",
     "arduino_workspace_path": "",
     "arduino_fqbn": "",
 }
@@ -54,6 +55,8 @@ def load_config() -> dict[str, Any]:
     config = DEFAULT_CONFIG | data if isinstance(data, dict) else DEFAULT_CONFIG.copy()
     if str(config.get("language", "vi")) not in LANGUAGES:
         config["language"] = "vi"
+    if str(config.get("theme", "light")) not in {"light", "dark", "neutral"}:
+        config["theme"] = "light"
     return config
 
 

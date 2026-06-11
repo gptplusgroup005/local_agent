@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from talos.core import ROOT
@@ -18,6 +19,8 @@ DLL_CANDIDATES = [
 ]
 TITLE_BUFFER_CHARS = 65536
 INO_BUFFER_CHARS = 4096
+_CACHE_TTL_SECONDS = 1.25
+_CACHE: dict[str, tuple[float, object]] = {}
 
 def _load_library() -> ctypes.CDLL | None:
     if os.name != "nt":
@@ -37,21 +40,82 @@ _LIBRARY = _load_library()
 def native_available() -> bool:
     return _LIBRARY is not None
 
+def cached_value(key: str, loader):
+    now = time.monotonic()
+    cached = _CACHE.get(key)
+    if cached and now - cached[0] <= _CACHE_TTL_SECONDS:
+        return cached[1]
+    value = loader()
+    _CACHE[key] = (now, value)
+    return value
+
 def list_window_titles() -> list[str]:
     if _LIBRARY is not None:
         buffer = ctypes.create_unicode_buffer(TITLE_BUFFER_CHARS)
         _LIBRARY.talos_list_window_titles(buffer, TITLE_BUFFER_CHARS)
         return [line for line in buffer.value.splitlines() if line.strip()]
-    return list_window_titles_fallback()
+    return list(cached_value("window_titles", list_window_titles_fallback))
 
 def list_window_titles_fallback() -> list[str]:
     if os.name != "nt":
         return []
+    titles = list_window_titles_win32_fallback()
+    if titles:
+        return titles
     command = powershell_command(
         "Get-Process | Where-Object { $_.MainWindowTitle } | Select-Object -ExpandProperty MainWindowTitle"
     )
     try:
-        completed = subprocess.run(command, capture_output=True, text=True, timeout=3)
+        completed = subprocess.run(command, capture_output=True, text=True, timeout=8)
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if completed.returncode != 0:
+        return []
+    titles: list[str] = []
+    for line in completed.stdout.splitlines():
+        title = line.strip()
+        if title and title not in titles:
+            titles.append(title)
+    return titles
+
+def list_window_titles_win32_fallback() -> list[str]:
+    script = r"""
+Add-Type @"
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+
+public static class TalosWindows {
+    public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    public static extern bool EnumWindows(EnumWindowsProc enumProc, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    public static extern bool IsWindowVisible(IntPtr hWnd);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int count);
+}
+"@
+
+$titles = New-Object System.Collections.Generic.List[string]
+[TalosWindows]::EnumWindows({
+    param([IntPtr]$hwnd, [IntPtr]$lparam)
+    if ([TalosWindows]::IsWindowVisible($hwnd)) {
+        $builder = New-Object System.Text.StringBuilder 512
+        [void][TalosWindows]::GetWindowText($hwnd, $builder, $builder.Capacity)
+        $title = $builder.ToString().Trim()
+        if ($title) {
+            $titles.Add($title)
+        }
+    }
+    return $true
+}, [IntPtr]::Zero) | Out-Null
+$titles | Sort-Object -Unique
+"""
+    try:
+        completed = subprocess.run(powershell_command(script), capture_output=True, text=True, timeout=8)
     except (OSError, subprocess.TimeoutExpired):
         return []
     if completed.returncode != 0:
@@ -66,14 +130,20 @@ def list_window_titles_fallback() -> list[str]:
 def list_arduino_ide_processes() -> list[dict[str, object]]:
     if os.name != "nt":
         return []
+    return list(cached_value("arduino_ide_processes", list_arduino_ide_processes_uncached))
+
+def list_arduino_tool_processes() -> list[dict[str, object]]:
+    if os.name != "nt":
+        return []
+    return list(cached_value("arduino_tool_processes", list_arduino_tool_processes_uncached))
+
+def list_arduino_ide_processes_uncached() -> list[dict[str, object]]:
     processes = list_arduino_ide_processes_wmic()
     if processes:
         return processes
     return list_arduino_ide_processes_powershell()
 
-def list_arduino_tool_processes() -> list[dict[str, object]]:
-    if os.name != "nt":
-        return []
+def list_arduino_tool_processes_uncached() -> list[dict[str, object]]:
     processes = list_arduino_tool_processes_wmic()
     if processes:
         return processes
