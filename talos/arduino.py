@@ -211,6 +211,15 @@ def find_sketch_folder(sketch_name: str, roots: list[Path]) -> Path | None:
             continue
     return None
 
+def is_unsaved_arduino_temp_folder(folder: Path) -> bool:
+    return any(part.startswith(".arduinoIDE-unsaved") for part in folder.parts)
+
+def find_saved_sketch_folder(sketch_name: str, roots: list[Path]) -> Path | None:
+    folder = find_sketch_folder(sketch_name, roots)
+    if folder is None or is_unsaved_arduino_temp_folder(folder):
+        return None
+    return folder
+
 def sketch_project_from_path(
     path_text: str,
     title: str = "",
@@ -231,6 +240,35 @@ def sketch_project_from_path(
         "source": source,
         "message": "Open Arduino sketch found.",
     }
+
+def sketch_stem(sketch_name: str) -> str:
+    return Path(sketch_name).stem.lower()
+
+def path_matches_title_sketch(path_text: str, title_sketches: list[str]) -> bool:
+    path = resolve_workspace(path_text)
+    if path is None:
+        return False
+    title_stems = {sketch_stem(sketch) for sketch in title_sketches}
+    return path.stem.lower() in title_stems or path.parent.name.lower() in title_stems
+
+def title_looks_unsaved_sketch(title_sketches: list[str]) -> bool:
+    return any(sketch_stem(sketch).startswith("sketch_") for sketch in title_sketches)
+
+def should_ignore_stale_process_paths(
+    open_ino_paths: list[str],
+    title_sketches: list[str],
+    roots: list[Path],
+    trusted_roots: list[Path],
+) -> bool:
+    if len(open_ino_paths) != 1 or not title_sketches:
+        return False
+    if any(path_matches_title_sketch(path_text, title_sketches) for path_text in open_ino_paths):
+        return False
+    if title_looks_unsaved_sketch(title_sketches):
+        return True
+    if any(find_saved_sketch_folder(sketch, trusted_roots) is not None for sketch in title_sketches):
+        return False
+    return not any(find_saved_sketch_folder(sketch, roots) is not None for sketch in title_sketches)
 
 def discover_arduino_projects(
     config: dict[str, Any],
@@ -267,7 +305,18 @@ def discover_arduino_projects(
         path = resolve_workspace(path_text)
         if path is not None:
             path_roots.append(path.parent if path.suffix else path)
+    trusted_roots = arduino_search_roots(config)
     roots = arduino_search_roots(config, extra_roots=path_roots)
+    title_sketches: list[str] = []
+    for title in window_titles:
+        lower = title.lower()
+        if "arduino" not in lower and ".ino" not in lower:
+            continue
+        for sketch in extract_ino_names(title):
+            if sketch not in title_sketches:
+                title_sketches.append(sketch)
+    if should_ignore_stale_process_paths(open_ino_paths, title_sketches, roots, trusted_roots):
+        open_ino_paths = []
     projects: list[dict[str, Any]] = []
     seen: set[str] = set()
     for path_text in open_ino_paths:
@@ -285,7 +334,7 @@ def discover_arduino_projects(
         if "arduino" not in lower and ".ino" not in lower:
             continue
         for sketch in extract_ino_names(title):
-            folder = find_sketch_folder(sketch, roots)
+            folder = find_saved_sketch_folder(sketch, roots)
             key = str(folder).lower() if folder else f"{title.lower()}::{sketch.lower()}"
             if key in seen:
                 continue

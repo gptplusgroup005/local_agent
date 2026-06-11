@@ -167,6 +167,25 @@ class TalosArduinoTests(unittest.TestCase):
             self.assertEqual([project["sketch"] for project in projects], ["mpu6050.ino", "test.ino"])
             self.assertTrue(all(project["valid"] for project in projects))
 
+    def test_arduino_discovery_ignores_stale_process_path_for_unsaved_current_sketch(self) -> None:
+        with TemporaryDirectory() as tmp:
+            old = Path(tmp) / "old"
+            old.mkdir()
+            old_ino = old / "old.ino"
+            old_ino.write_text("void setup() {}\nvoid loop() {}\n", encoding="utf-8")
+
+            projects = discover_arduino_projects(
+                {},
+                titles=["sketch_jun11a | Arduino IDE 2.3.4"],
+                ino_paths=[str(old_ino)],
+            )
+
+            self.assertEqual(len(projects), 1)
+            self.assertEqual(projects[0]["sketch"], "sketch_jun11a.ino")
+            self.assertEqual(projects[0]["path"], "")
+            self.assertFalse(projects[0]["valid"])
+            self.assertEqual(projects[0]["source"], "window_title")
+
     def test_arduino_discovery_attaches_detected_board_to_open_project(self) -> None:
         with TemporaryDirectory() as tmp:
             sketch = Path(tmp) / "test"

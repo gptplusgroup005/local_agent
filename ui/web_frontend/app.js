@@ -6,10 +6,14 @@ const state = {
   arduinoBoardName: "",
   themeHydrated: false,
   lastVerifyText: "Sandbox compile has not been run.",
+  lastRefreshAt: 0,
 };
 
 const THEMES = ["light", "dark", "neutral"];
 const THEME_KEY = "talos-theme";
+const FAST_REFRESH_MS = 1000;
+const IDLE_REFRESH_MS = 5000;
+const REFRESH_TICK_MS = 250;
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
@@ -28,6 +32,11 @@ async function api(path, options = {}) {
 function setView(viewId) {
   $$(".view").forEach((view) => view.classList.toggle("active", view.id === viewId));
   $$(".nav").forEach((button) => button.classList.toggle("active", button.dataset.view === viewId));
+  if (viewId === "workspace") refresh();
+}
+
+function activeViewId() {
+  return $(".view.active")?.id || "dashboard";
 }
 
 function currentTheme() {
@@ -230,11 +239,21 @@ function render(payload) {
 async function refresh() {
   if (state.refreshPromise) return state.refreshPromise;
   state.refreshPromise = api("/api/state")
-    .then(render)
+    .then((payload) => {
+      render(payload);
+      state.lastRefreshAt = Date.now();
+      return payload;
+    })
     .finally(() => {
       state.refreshPromise = null;
     });
   return state.refreshPromise;
+}
+
+function maybeRefresh() {
+  if (document.hidden) return;
+  const interval = activeViewId() === "workspace" ? FAST_REFRESH_MS : IDLE_REFRESH_MS;
+  if (Date.now() - state.lastRefreshAt >= interval) refresh();
 }
 
 async function saveArduinoWorkspace() {
@@ -373,6 +392,4 @@ function bindEvents() {
 
 bindEvents();
 refresh();
-setInterval(() => {
-  if (!document.hidden) refresh();
-}, 5000);
+setInterval(maybeRefresh, REFRESH_TICK_MS);

@@ -19,7 +19,7 @@ DLL_CANDIDATES = [
 ]
 TITLE_BUFFER_CHARS = 65536
 INO_BUFFER_CHARS = 4096
-_CACHE_TTL_SECONDS = 1.25
+_CACHE_TTL_SECONDS = 0.45
 _CACHE: dict[str, tuple[float, object]] = {}
 
 def _load_library() -> ctypes.CDLL | None:
