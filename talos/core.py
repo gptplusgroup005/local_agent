@@ -59,19 +59,15 @@ def load_config() -> dict[str, Any]:
         config["theme"] = "light"
     return config
 
-
 def save_config(config: dict[str, Any]) -> None:
     write_json_file(CONFIG_PATH, DEFAULT_CONFIG | config)
-
 
 def language_code(config: dict[str, Any]) -> str:
     code = str(config.get("language", "vi"))
     return code if code in LANGUAGES else "vi"
 
-
 def language_label(config: dict[str, Any]) -> str:
     return LANGUAGES[language_code(config)]
-
 
 def now() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
