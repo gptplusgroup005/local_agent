@@ -1,89 +1,108 @@
-# Talos Pipeline Note
+# Talos Pipeline
 
-## Muc tieu cuoi
+## Final Goal
 
-Talos la app local dong vai tro tool server cho Codex, giup Codex lam viec voi cac IDE/app ben ngoai VSCode. Truoc mat Talos tap trung vao Arduino IDE: nhan dien sketch dang mo, tim dung sketch folder, doc/sua file, detect board, verify code trong sandbox, va tao vong lap debug co the lap lai.
+Talos is a local tool server for Codex. Its job is to let Codex work with IDEs and apps outside VSCode. The first supported target is Arduino IDE: detect open sketches, resolve the real sketch folder, read and edit files, detect board settings, verify code in a sandbox, and support a repeatable debug loop.
 
-Muc tieu ngan gon:
-
-```text
-Talos = local bridge giua Codex va cac IDE/app khac, bat dau voi Arduino IDE.
-```
-
-## Vi tri hien tai
-
-- Detect Arduino IDE dang chay.
-- Detect nhieu sketch `.ino` dang mo.
-- Truy nguoc sketch folder that khi sketch da duoc luu.
-- Bo qua stale process path khi file cu da dong.
-- Khong coi folder tam `.arduinoIDE-unsaved...` la workspace hop le.
-- Detect board/FQBN tu Arduino language server.
-- Verify sandbox bang `arduino-cli`.
-- Build va load duoc native C DLL tai `native/bin/talos_native.dll`.
-- UI da co theme, scroll, copy output, copy file list, va dashboard trang thai.
-
-Danh gia pipeline:
+Short version:
 
 ```text
-Stage 1 - Arduino detection stability: mostly usable, can keep refining.
-Stage 2 - Verify output cleanup: current active step.
-Stage 3 - Arduino file workflow: next major step after verify output is structured.
-Stage 4 - Codex debug loop: depends on Stage 2 and Stage 3.
-Stage 5 - Native C expansion: optional performance hardening.
-Stage 6 - MATLAB: later, after Arduino is stable.
+Talos = local bridge between Codex and external IDEs/apps, starting with Arduino IDE.
 ```
 
-## Pipeline tiep theo
+## Current Position
 
-### 1. Arduino detection stability
+```text
+Current active stage: Stage 2 - Verify output cleanup
+Next major stage: Stage 3 - Arduino file workflow
+```
 
-- Giam latency khi mo/dong sketch.
-- Lam ro trang thai unsaved sketch trong UI.
-- Chi cho phep select/verify khi sketch co folder that.
-- Tang do chinh xac mapping sketch voi board khi Arduino IDE mo nhieu cua so.
+Stage 1 is usable and will keep receiving hardening fixes. Stage 2 is partly complete: ANSI cleanup, memory parsing, library parsing, and platform parsing are implemented. The remaining Stage 2 work is to surface compile issues by file and line in the UI.
 
-### 2. Verify output cleanup
+## Progress Rules
 
-- [x] Xoa ANSI escape code trong output.
-- [x] Parse compile result thanh cac truong rieng:
-  - status
-  - memory usage
-  - used libraries
-  - used platform
-  - errors/warnings co ban
-- [ ] Hien thi loi compile theo file/line trong UI neu co.
+- Every pipeline-related task must update this file before the task is considered done.
+- When a checklist item is completed, change `[ ]` to `[x]`.
+- When a new requirement appears, add it under the closest matching stage.
+- Use `scripts/pipeline_status.ps1` to check stage progress from this file.
 
-### 3. Arduino file workflow
+Command:
 
-- Them panel/doc file editor cho `.ino`, `.cpp`, `.h`.
-- Cho phep doc/sua/luu file trong sketch folder.
-- Dam bao moi thao tac file bi scope trong workspace, khong thoat ra ngoai folder sketch.
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\pipeline_status.ps1
+```
 
-### 4. Codex debug loop
+## Stage 0 - Pipeline Management
 
-- Verify sandbox.
-- Neu fail, parse loi thanh danh sach file/line/message.
-- Dua context loi va file lien quan cho Codex.
-- Sua file.
-- Verify lai.
+- [x] Keep this pipeline note aligned with current project status.
+- [x] Provide a command-line pipeline progress checker.
+- [x] Require pipeline updates when a pipeline-related task is completed.
 
-### 5. Native C expansion
+## Stage 1 - Arduino Detection Stability
 
-- Hien native C dang xu ly window title va extract `.ino` name.
-- Co the chuyen them process/window detection sang C de giam phu thuoc PowerShell/CIM.
-- Muc tieu la detection nhanh hon, it delay hon, on dinh hon tren Windows.
+- [x] Detect Arduino IDE process.
+- [x] Detect multiple open `.ino` sketches.
+- [x] Resolve the real sketch folder when the sketch is saved.
+- [x] Ignore stale process paths after an old sketch is closed.
+- [x] Do not treat `.arduinoIDE-unsaved...` folders as valid workspaces.
+- [x] Detect board/FQBN from Arduino language server processes.
+- [x] Verify sketches through `arduino-cli`.
+- [x] Use bundled Arduino IDE `arduino-cli` when it is not in PATH.
+- [x] Build and load native C DLL at `native/bin/talos_native.dll`.
+- [x] Reduce UI refresh latency while the Arduino tab is active.
+- [ ] Make unsaved sketch status clearer in the Arduino UI.
+- [ ] Improve exact sketch-to-board mapping when many Arduino IDE windows are open.
 
-### 6. MATLAB sau khi Arduino on dinh
+## Stage 2 - Verify Output Cleanup
 
-- Detect MATLAB dang chay.
-- Detect current folder/script.
-- Doc/sua file MATLAB.
-- Chay script/command trong sandbox hoac runtime co kiem soat.
+- [x] Strip ANSI escape codes from Arduino CLI output.
+- [x] Parse program memory usage.
+- [x] Parse dynamic memory usage.
+- [x] Parse used libraries.
+- [x] Parse used platform.
+- [x] Parse basic compile errors and warnings into `issues`.
+- [x] Show memory/library/platform summary in the Verify output UI.
+- [ ] Show compile issues by file and line in the Verify output UI.
+- [ ] Add a copy button for issue-only debug context.
 
-## Nguyen tac phat trien
+## Stage 3 - Arduino File Workflow
 
-- Uu tien Arduino truoc, MATLAB sau.
-- Khong coi unsaved/temp sketch la workspace hop le.
-- Moi verify phai chay tren sandbox copy, khong build truc tiep tren folder goc.
-- UI phai cho copy output/context de debug nhanh voi Codex.
-- Native C chi nen ganh phan can toc do/he thong; Python giu vai tro bridge/API.
+- [x] Expose scoped backend APIs to read, write, and delete workspace files.
+- [x] Show workspace file list in the Arduino UI.
+- [ ] Add a file viewer/editor for `.ino`, `.cpp`, `.h`, and related source files.
+- [ ] Save edited files back into the selected sketch folder.
+- [ ] Keep all file operations scoped inside the sketch workspace.
+- [ ] Add UI feedback for dirty/unsaved edited files.
+
+## Stage 4 - Codex Debug Loop
+
+- [x] Verify selected workspace in a sandbox copy.
+- [x] Copy verify output for pasting into Codex.
+- [ ] Feed parsed compile issues into a compact debug context.
+- [ ] Let Codex patch relevant files through Talos APIs.
+- [ ] Re-run verify after a Codex patch.
+- [ ] Keep a short history of verify attempts and patches.
+
+## Stage 5 - Native C Expansion
+
+- [x] Native C extracts `.ino` names from Arduino IDE titles.
+- [x] Native C lists top-level window titles.
+- [ ] Move more Windows process/window detection into native C.
+- [ ] Reduce dependence on PowerShell/CIM for hot-path detection.
+- [ ] Add native build/check command to normal verification flow.
+
+## Stage 6 - MATLAB Later
+
+- [ ] Detect MATLAB process.
+- [ ] Detect MATLAB current folder/script.
+- [ ] Read and edit MATLAB files through scoped APIs.
+- [ ] Run MATLAB scripts or commands in a controlled runtime.
+
+## Development Principles
+
+- Arduino first, MATLAB later.
+- Unsaved/temp sketches are signals only, not valid workspaces.
+- Verify must run against a sandbox copy, not the original sketch folder.
+- UI must make output/context easy to copy into Codex.
+- Native C should own speed-sensitive Windows/system helpers.
+- Python should remain the bridge/API layer.
