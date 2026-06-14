@@ -19,7 +19,14 @@ from talos.arduino import (
 )
 from talos.core import language_label
 from talos.native_bridge import extract_board_name, extract_fqbn, native_available
-from talos.codex_bridge import CodexBridge, build_codex_prompt
+from talos.codex_bridge import (
+    CODEX_TURN_TIMEOUT_SECONDS,
+    CodexBridge,
+    THREAD_SANDBOX_MODE,
+    build_codex_prompt,
+    diff_workspace_snapshots,
+    snapshot_workspace,
+)
 
 class TalosArduinoTests(unittest.TestCase):
     def test_codex_prompt_contains_selected_arduino_context(self) -> None:
@@ -39,6 +46,49 @@ class TalosArduinoTests(unittest.TestCase):
         self.assertIn("arduino:avr:uno", prompt)
         self.assertIn("void setup()", prompt)
         self.assertIn("ERROR Blink.ino:2:1", prompt)
+        self.assertIn("You may edit relevant files directly", prompt)
+
+    def test_codex_prompt_can_be_read_only(self) -> None:
+        prompt = build_codex_prompt("Review only.", allow_edits=False)
+
+        self.assertIn("This turn is read-only.", prompt)
+
+    def test_codex_protocol_uses_legacy_thread_sandbox_enum(self) -> None:
+        self.assertEqual(THREAD_SANDBOX_MODE, "workspace-write")
+        self.assertEqual(CODEX_TURN_TIMEOUT_SECONDS, 300)
+
+    def test_codex_workspace_snapshot_reports_added_updated_and_deleted_files(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "update.cpp").write_text("old\n", encoding="utf-8")
+            (root / "delete.h").write_text("remove\n", encoding="utf-8")
+            before = snapshot_workspace(root)
+            (root / "update.cpp").write_text("new\n", encoding="utf-8")
+            (root / "delete.h").unlink()
+            (root / "add.ino").write_text("void setup() {}\n", encoding="utf-8")
+
+            changes = diff_workspace_snapshots(before, snapshot_workspace(root))
+
+            self.assertEqual(
+                [(change["path"], change["kind"]) for change in changes],
+                [("add.ino", "add"), ("delete.h", "delete"), ("update.cpp", "update")],
+            )
+
+    def test_codex_patch_tracking_supports_an_initially_empty_workspace(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bridge = CodexBridge()
+            bridge._turn_workspace = str(root)
+            bridge._turn_track_changes = True
+            bridge._turn_snapshot = snapshot_workspace(root)
+            (root / "created.ino").write_text("void setup() {}\n", encoding="utf-8")
+
+            bridge._finalize_turn_patch()
+            status = bridge.status(start=False)
+
+            self.assertEqual(status["patch_revision"], 1)
+            self.assertEqual(status["patches"][0]["files"][0]["path"], "created.ino")
+            self.assertEqual(status["patches"][0]["files"][0]["kind"], "add")
 
     def test_frontend_contains_codex_workbench_panel(self) -> None:
         html = (Path(__file__).parents[1] / "ui" / "web_frontend" / "index.html").read_text(encoding="utf-8")
@@ -48,6 +98,8 @@ class TalosArduinoTests(unittest.TestCase):
         self.assertIn('id="toggleCodexBtn"', html)
         self.assertIn('id="editorLineNumbers"', html)
         self.assertIn("data-codex-prompt", html)
+        self.assertIn('id="codexAllowEdits"', html)
+        self.assertIn('id="cancelCodexBtn"', html)
 
     def test_codex_status_starts_runtime_without_blocking_for_handshake(self) -> None:
         bridge = CodexBridge()

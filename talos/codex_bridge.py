@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import queue
 import shutil
@@ -11,6 +12,10 @@ from typing import Any
 from talos.core import ROOT, now
 
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+PATCH_IGNORED_DIRS = {".git", ".talos_sandbox", "__pycache__", "build", "dist"}
+PATCH_FILE_LIMIT = 2_000_000
+THREAD_SANDBOX_MODE = "workspace-write"
+CODEX_TURN_TIMEOUT_SECONDS = 300
 
 
 def find_codex_executable() -> str:
@@ -30,6 +35,7 @@ def build_codex_prompt(
     workspace: dict[str, Any] | None = None,
     active_file: dict[str, Any] | None = None,
     verify_context: str = "",
+    allow_edits: bool = True,
 ) -> str:
     workspace = workspace or {}
     active_file = active_file or {}
@@ -51,11 +57,69 @@ def build_codex_prompt(
         )
     if verify_context.strip():
         sections.append(f"Latest sandbox verify context:\n{verify_context.strip()}")
-    sections.append(
-        "Work only inside the selected Arduino workspace. Use the available local tools "
-        "to inspect or edit files when needed, and summarize any changes clearly."
-    )
+    if allow_edits:
+        sections.append(
+            "You may edit relevant files directly inside the selected Arduino workspace. "
+            "Keep changes focused, preserve unrelated code, and summarize every changed file."
+        )
+    else:
+        sections.append(
+            "This turn is read-only. Inspect the selected Arduino workspace, but do not modify files."
+        )
     return "\n\n".join(section for section in sections if section)
+
+
+def snapshot_workspace(workspace: str | Path) -> dict[str, dict[str, Any]]:
+    root = Path(workspace).resolve()
+    snapshot: dict[str, dict[str, Any]] = {}
+    if not root.exists() or not root.is_dir():
+        return snapshot
+    try:
+        paths = root.rglob("*")
+        for path in paths:
+            if not path.is_file():
+                continue
+            relative = path.relative_to(root)
+            if any(part in PATCH_IGNORED_DIRS or part.startswith(".talos_") for part in relative.parts[:-1]):
+                continue
+            try:
+                size = path.stat().st_size
+                if size > PATCH_FILE_LIMIT:
+                    continue
+                digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            except OSError:
+                continue
+            snapshot[relative.as_posix()] = {"sha256": digest, "bytes": size}
+    except OSError:
+        return snapshot
+    return snapshot
+
+
+def diff_workspace_snapshots(
+    before: dict[str, dict[str, Any]],
+    after: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    changes: list[dict[str, Any]] = []
+    for path in sorted(set(before) | set(after), key=str.lower):
+        old = before.get(path)
+        new = after.get(path)
+        if old is None and new is not None:
+            kind = "add"
+        elif old is not None and new is None:
+            kind = "delete"
+        elif old != new:
+            kind = "update"
+        else:
+            continue
+        changes.append(
+            {
+                "path": path,
+                "kind": kind,
+                "before_bytes": int((old or {}).get("bytes") or 0),
+                "after_bytes": int((new or {}).get("bytes") or 0),
+            }
+        )
+    return changes
 
 
 class CodexBridge:
@@ -70,12 +134,21 @@ class CodexBridge:
         self._activity: list[str] = []
         self._account: dict[str, Any] | None = None
         self._error = ""
+        self._turn_error = ""
         self._starting = False
         self._initialized = threading.Event()
         self._thread_id = ""
         self._thread_cwd = ""
         self._turn_running = False
+        self._turn_id = ""
         self._assistant_message_id = ""
+        self._patches: list[dict[str, Any]] = []
+        self._patch_revision = 0
+        self._turn_workspace = ""
+        self._turn_track_changes = False
+        self._turn_snapshot: dict[str, dict[str, Any]] = {}
+        self._turn_protocol_changes: dict[str, dict[str, Any]] = {}
+        self._turn_diff = ""
 
     def status(self, start: bool = True) -> dict[str, Any]:
         if start:
@@ -91,9 +164,11 @@ class CodexBridge:
                 "thread_id": self._thread_id,
                 "thread_cwd": self._thread_cwd,
                 "account": self._account,
-                "error": self._error,
+                "error": self._error or self._turn_error,
                 "messages": list(self._messages[-100:]),
                 "activity": list(self._activity[-40:]),
+                "patches": list(self._patches[-20:]),
+                "patch_revision": self._patch_revision,
             }
 
     def start_async(self) -> None:
@@ -178,6 +253,7 @@ class CodexBridge:
         workspace: dict[str, Any],
         active_file: dict[str, Any] | None = None,
         verify_context: str = "",
+        allow_edits: bool = True,
     ) -> dict[str, Any]:
         text = message.strip()
         if not text:
@@ -199,10 +275,16 @@ class CodexBridge:
             )
             self._turn_running = True
             self._error = ""
-        prompt = build_codex_prompt(text, workspace, active_file, verify_context)
+            self._turn_error = ""
+            self._turn_workspace = workspace_path
+            self._turn_track_changes = allow_edits
+            self._turn_snapshot = snapshot_workspace(workspace_path) if allow_edits else {}
+            self._turn_protocol_changes = {}
+            self._turn_diff = ""
+        prompt = build_codex_prompt(text, workspace, active_file, verify_context, allow_edits)
         threading.Thread(
             target=self._run_turn,
-            args=(prompt, workspace_path),
+            args=(prompt, workspace_path, allow_edits),
             daemon=True,
         ).start()
         return {"ok": True, "status": "started"}
@@ -214,8 +296,12 @@ class CodexBridge:
             self._thread_id = ""
             self._thread_cwd = ""
             self._assistant_message_id = ""
+            self._turn_id = ""
+            self._turn_error = ""
             self._messages.clear()
             self._activity.clear()
+            self._patches.clear()
+            self._patch_revision += 1
             self._append_activity("Started a new local conversation.")
         return {"ok": True}
 
@@ -224,6 +310,7 @@ class CodexBridge:
             process = self._process
             self._process = None
             self._turn_running = False
+            self._turn_id = ""
             self._starting = False
             self._initialized.clear()
             self._pending.clear()
@@ -235,7 +322,7 @@ class CodexBridge:
         except subprocess.TimeoutExpired:
             process.kill()
 
-    def _run_turn(self, prompt: str, cwd: str) -> None:
+    def _run_turn(self, prompt: str, cwd: str, allow_edits: bool) -> None:
         try:
             with self._lock:
                 thread_id = self._thread_id
@@ -246,7 +333,7 @@ class CodexBridge:
                     {
                         "cwd": cwd,
                         "approvalPolicy": "never",
-                        "sandbox": "workspaceWrite",
+                        "sandbox": THREAD_SANDBOX_MODE,
                         "serviceName": "talos",
                     },
                     timeout=30,
@@ -258,7 +345,7 @@ class CodexBridge:
                     self._thread_id = thread_id
                     self._thread_cwd = cwd
                     self._append_activity(f"Thread ready for {cwd}.")
-            self._request(
+            result = self._request(
                 "turn/start",
                 {
                     "threadId": thread_id,
@@ -266,18 +353,67 @@ class CodexBridge:
                     "cwd": cwd,
                     "approvalPolicy": "never",
                     "sandboxPolicy": {
-                        "type": "workspaceWrite",
-                        "writableRoots": [cwd],
+                        "type": "workspaceWrite" if allow_edits else "readOnly",
+                        **({"writableRoots": [cwd]} if allow_edits else {}),
                         "networkAccess": False,
                     },
                 },
                 timeout=30,
             )
+            turn_id = str(result.get("turn", {}).get("id") or "")
+            with self._lock:
+                self._turn_id = turn_id
+            if turn_id:
+                threading.Thread(
+                    target=self._watch_turn_timeout,
+                    args=(thread_id, turn_id),
+                    daemon=True,
+                ).start()
         except Exception as error:
             with self._lock:
-                self._error = str(error)
+                self._turn_error = str(error)
                 self._turn_running = False
+                self._turn_id = ""
+                self._clear_turn_patch_state()
                 self._append_activity(f"Codex error: {error}")
+
+    def cancel_turn(self, reason: str = "Codex turn cancelled.") -> dict[str, Any]:
+        with self._lock:
+            if not self._turn_running:
+                return {"ok": False, "error": "No Codex turn is running."}
+            thread_id = self._thread_id
+            turn_id = self._turn_id
+        if thread_id and turn_id:
+            try:
+                self._request(
+                    "turn/interrupt",
+                    {"threadId": thread_id, "turnId": turn_id},
+                    timeout=10,
+                )
+            except Exception as error:
+                with self._lock:
+                    self._append_activity(f"Codex interrupt warning: {error}")
+        with self._lock:
+            if self._turn_id == turn_id:
+                self._turn_running = False
+                self._turn_id = ""
+                self._turn_error = reason
+                self._clear_turn_patch_state()
+                self._append_activity(reason)
+        return {"ok": True}
+
+    def _watch_turn_timeout(self, thread_id: str, turn_id: str) -> None:
+        threading.Event().wait(CODEX_TURN_TIMEOUT_SECONDS)
+        with self._lock:
+            still_running = (
+                self._turn_running
+                and self._thread_id == thread_id
+                and self._turn_id == turn_id
+            )
+        if still_running:
+            self.cancel_turn(
+                f"Codex turn timed out after {CODEX_TURN_TIMEOUT_SECONDS // 60} minutes."
+            )
 
     def _request(self, method: str, params: dict[str, Any], timeout: float = 15) -> dict[str, Any]:
         response_queue: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=1)
@@ -373,19 +509,32 @@ class CodexBridge:
                 self._complete_item(params.get("item") or {})
             elif method == "item/started":
                 self._started_item(params.get("item") or {})
+            elif method == "item/fileChange/patchUpdated":
+                self._capture_protocol_changes(params.get("changes") or [])
+            elif method == "turn/diff/updated":
+                self._turn_diff = str(params.get("diff") or "")
             elif method == "turn/completed":
                 turn = params.get("turn") or {}
+                self._finalize_turn_patch()
                 self._turn_running = False
+                self._turn_id = ""
                 self._assistant_message_id = ""
                 status = str(turn.get("status") or "completed")
                 self._append_activity(f"Codex turn {status}.")
                 error = turn.get("error") or {}
                 if error:
-                    self._error = str(error.get("message") or error)
+                    self._turn_error = str(error.get("message") or error)
             elif method == "error":
                 error = params.get("error") or {}
-                self._error = str(error.get("message") or error or "Unknown Codex error.")
-                self._append_activity(f"Codex error: {self._error}")
+                message_text = str(error.get("message") or error or "Unknown Codex error.")
+                if self._turn_running:
+                    self._turn_error = message_text
+                    self._turn_running = False
+                    self._turn_id = ""
+                    self._clear_turn_patch_state()
+                else:
+                    self._error = message_text
+                self._append_activity(f"Codex error: {message_text}")
             elif method == "account/updated":
                 self._append_activity("Codex account state changed.")
 
@@ -438,7 +587,67 @@ class CodexBridge:
             self._append_activity(f"Completed: {command}")
         elif item_type == "fileChange":
             changes = item.get("changes") or []
+            self._capture_protocol_changes(changes)
             self._append_activity(f"Applied {len(changes)} file change(s).")
+
+    def _capture_protocol_changes(self, changes: list[dict[str, Any]]) -> None:
+        workspace = Path(self._turn_workspace).resolve() if self._turn_workspace else None
+        if workspace is None:
+            return
+        for change in changes:
+            raw_path = str(change.get("path") or "").strip()
+            if not raw_path:
+                continue
+            try:
+                path = Path(raw_path)
+                resolved = path.resolve() if path.is_absolute() else (workspace / path).resolve()
+                relative = resolved.relative_to(workspace).as_posix()
+            except (OSError, ValueError):
+                self._append_activity(f"Ignored out-of-workspace change: {raw_path}")
+                continue
+            kind_value = change.get("kind") or {}
+            kind = str(kind_value.get("type") if isinstance(kind_value, dict) else kind_value or "update")
+            self._turn_protocol_changes[relative] = {
+                "path": relative,
+                "kind": kind,
+                "diff": str(change.get("diff") or ""),
+            }
+
+    def _finalize_turn_patch(self) -> None:
+        workspace = self._turn_workspace
+        before = self._turn_snapshot
+        if not workspace or not self._turn_track_changes:
+            self._clear_turn_patch_state()
+            return
+        after = snapshot_workspace(workspace)
+        snapshot_changes = diff_workspace_snapshots(before, after)
+        merged: dict[str, dict[str, Any]] = {
+            change["path"]: dict(change)
+            for change in snapshot_changes
+        }
+        for path, change in self._turn_protocol_changes.items():
+            merged.setdefault(path, {}).update(change)
+        files = [merged[path] for path in sorted(merged, key=str.lower)]
+        if files:
+            self._patch_revision += 1
+            patch = {
+                "id": f"patch-{self._patch_revision}",
+                "time": now(),
+                "workspace": workspace,
+                "files": files,
+                "diff": self._turn_diff,
+            }
+            self._patches.append(patch)
+            del self._patches[:-20]
+            self._append_activity(f"Recorded Codex patch across {len(files)} file(s).")
+        self._clear_turn_patch_state()
+
+    def _clear_turn_patch_state(self) -> None:
+        self._turn_workspace = ""
+        self._turn_track_changes = False
+        self._turn_snapshot = {}
+        self._turn_protocol_changes = {}
+        self._turn_diff = ""
 
     def _append_activity(self, text: str) -> None:
         self._activity.append(f"{now()} {text}")

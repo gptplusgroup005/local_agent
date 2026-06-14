@@ -194,7 +194,14 @@
               <form id="codexComposer" class="codex-composer">
                 <textarea id="codexInput" rows="3" placeholder="Ask Codex about this sketch..." aria-label="Message Codex"></textarea>
                 <div class="codex-compose-row">
-                  <span id="codexStatus">Connecting to local Codex...</span>
+                  <div class="codex-compose-meta">
+                    <label class="codex-edit-toggle" title="Allow Codex to edit files in the selected sketch folder">
+                      <input id="codexAllowEdits" type="checkbox" checked />
+                      <span>Allow edits</span>
+                    </label>
+                    <span id="codexStatus">Connecting to local Codex...</span>
+                  </div>
+                  <button id="cancelCodexBtn" class="button" type="button" hidden>Cancel</button>
                   <button id="sendCodexBtn" class="button primary" type="submit">Send</button>
                 </div>
               </form>

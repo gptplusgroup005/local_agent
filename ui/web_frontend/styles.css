@@ -1317,6 +1317,52 @@ textarea:focus {
   background: var(--accent-subtle);
 }
 
+.codex-patch {
+  display: grid;
+  gap: 7px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--green);
+  border-radius: 6px;
+  background: var(--canvas-subtle);
+}
+
+.codex-patch-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.codex-patch-list {
+  display: grid;
+  gap: 4px;
+}
+
+.codex-patch-file {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 6px;
+  min-width: 0;
+  font: 10px/1.4 ui-monospace, SFMono-Regular, SFMono, Consolas, monospace;
+}
+
+.codex-patch-kind {
+  color: var(--green);
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.codex-patch-file code {
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .codex-activity {
   max-height: 92px;
   padding: 7px 10px;
@@ -1354,13 +1400,46 @@ textarea:focus {
   justify-content: space-between;
 }
 
-.codex-compose-row span {
+.codex-compose-meta {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.codex-compose-row #codexStatus {
   min-width: 0;
   color: var(--muted);
   font-size: 10px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.codex-edit-toggle {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  width: max-content;
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.codex-edit-toggle input {
+  width: 14px;
+  height: 14px;
+}
+
+.files-section tr.codex-changed td {
+  background: rgba(31, 136, 61, 0.08);
+}
+
+.file-change-badge {
+  color: var(--green);
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
 }
 
 .codex-compose-row .button {

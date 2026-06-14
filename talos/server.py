@@ -77,6 +77,7 @@ def state_payload() -> dict[str, Any]:
             "POST /api/arduino_verify",
             "GET /api/codex_status",
             "POST /api/codex_message",
+            "POST /api/codex_cancel",
             "POST /api/codex_thread",
         ],
         "events": list(EVENTS),
@@ -173,6 +174,7 @@ class LocalAgentWebHandler(BaseHTTPRequestHandler):
                 workspace,
                 active_file,
                 str(payload.get("verify_context", "")),
+                bool(payload.get("allow_edits", True)),
             )
             if result.get("ok"):
                 log_event(f"{now()} started Codex turn")
@@ -180,6 +182,10 @@ class LocalAgentWebHandler(BaseHTTPRequestHandler):
             return
         if self.path == "/api/codex_thread":
             result = CODEX_BRIDGE.new_thread()
+            self.send_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST)
+            return
+        if self.path == "/api/codex_cancel":
+            result = CODEX_BRIDGE.cancel_turn()
             self.send_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST)
             return
         self.send_json({"error": "Not found."}, HTTPStatus.NOT_FOUND)

@@ -97,7 +97,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\pipeline_status.ps1
 - [x] Connect the panel to the locally authenticated Codex app-server runtime.
 - [x] Feed the selected workspace, active file, and parsed verify issues into compact Codex context.
 - [x] Keep Codex startup and UI polling non-blocking to avoid workbench lag.
-- [ ] Let Codex patch relevant files through Talos APIs.
+- [x] Let Codex patch relevant files through the Talos-controlled workspace bridge.
+- [x] Recover cleanly from rejected or timed-out Codex turns and allow manual cancellation.
 - [ ] Re-run verify after a Codex patch.
 - [ ] Keep a short history of verify attempts and patches.
 

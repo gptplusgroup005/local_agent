@@ -21,6 +21,9 @@ const state = {
   codexMessagesSignature: "",
   codexRefreshPromise: null,
   codexRefreshTimer: null,
+  codexPatchRevision: 0,
+  codexChangedFiles: new Set(),
+  codexPatchSyncRunning: false,
 };
 
 const THEMES = ["light", "dark", "neutral"];
@@ -412,10 +415,11 @@ function renderArduino(arduino, force = false, ide = {}) {
     : "Set a sketch folder that contains at least one .ino file.";
   $("#verifyArduinoBtn").disabled = state.arduinoVerifyRunning || !arduino.configured;
   $("#arduinoFiles").innerHTML = (arduino.files || []).map((file) => `
-    <tr data-path="${escapeHtml(file.path)}" tabindex="0">
+    <tr class="${state.codexChangedFiles.has(String(file.path).toLowerCase()) ? "codex-changed" : ""}" data-path="${escapeHtml(file.path)}" tabindex="0">
       <td>
         <span class="file-name">${escapeHtml(file.path)}</span>
         <span class="file-meta">${Number(file.lines || 0)} lines | ${Number(file.bytes || 0)} bytes</span>
+        ${state.codexChangedFiles.has(String(file.path).toLowerCase()) ? '<span class="file-change-badge">Changed by Codex</span>' : ""}
       </td>
     </tr>
   `).join("");
@@ -457,21 +461,39 @@ function renderCodex(payload = {}) {
   state.codexBusy = Boolean(payload.busy);
   $("#codexAccount").textContent = codexAccountLabel(payload);
   $("#sendCodexBtn").disabled = !payload.ok || state.codexBusy;
+  $("#sendCodexBtn").hidden = state.codexBusy;
+  $("#cancelCodexBtn").hidden = !state.codexBusy;
+  $("#cancelCodexBtn").disabled = !state.codexBusy;
   $("#codexInput").disabled = !payload.ok;
   $("#newCodexThreadBtn").disabled = state.codexBusy;
   $("#codexStatus").textContent = payload.error
     || (state.codexBusy ? "Codex is working..." : payload.thread_id ? "Thread ready" : "Ready for a new thread");
   const messages = payload.messages || [];
-  const signature = JSON.stringify(messages);
+  const patches = payload.patches || [];
+  const signature = JSON.stringify([messages, patches]);
   if (signature !== state.codexMessagesSignature) {
     state.codexMessagesSignature = signature;
-    $("#codexMessages").innerHTML = messages.length
-      ? messages.map((message) => `
+    const messageHtml = messages.map((message) => `
           <article class="codex-message ${message.role === "user" ? "user" : "assistant"}">
             <span class="codex-message-role">${message.role === "user" ? "You" : "Codex"}</span>
             <div class="codex-message-body">${escapeHtml(message.text || "")}</div>
           </article>
-        `).join("")
+        `).join("");
+    const patchHtml = patches.slice(-5).map((patch) => `
+      <section class="codex-patch">
+        <div class="codex-patch-head"><span>Applied patch</span><span>${escapeHtml(patch.time || "")}</span></div>
+        <div class="codex-patch-list">
+          ${(patch.files || []).map((file) => `
+            <div class="codex-patch-file">
+              <span class="codex-patch-kind">${escapeHtml(file.kind || "update")}</span>
+              <code title="${escapeHtml(file.path || "")}">${escapeHtml(file.path || "")}</code>
+            </div>
+          `).join("")}
+        </div>
+      </section>
+    `).join("");
+    $("#codexMessages").innerHTML = (messageHtml || patchHtml)
+      ? `${messageHtml}${patchHtml}`
       : `
         <div class="codex-empty">
           <span class="codex-empty-mark">C</span>
@@ -490,6 +512,15 @@ function renderCodex(payload = {}) {
   const visibleActivity = state.codexBusy ? activity.slice(-4) : [];
   $("#codexActivity").hidden = !visibleActivity.length;
   $("#codexActivity").textContent = visibleActivity.join("\n");
+  const nextRevision = Number(payload.patch_revision || 0);
+  if (nextRevision !== state.codexPatchRevision) {
+    const latestPatch = patches.at(-1) || {};
+    state.codexPatchRevision = nextRevision;
+    state.codexChangedFiles = new Set(
+      (latestPatch.files || []).map((file) => String(file.path || "").toLowerCase()),
+    );
+    syncWorkspaceAfterCodexPatch();
+  }
 }
 
 function bindCodexSuggestions() {
@@ -499,6 +530,31 @@ function bindCodexSuggestions() {
       $("#codexInput").focus();
     });
   });
+}
+
+async function syncWorkspaceAfterCodexPatch() {
+  if (state.codexPatchSyncRunning) return;
+  state.codexPatchSyncRunning = true;
+  try {
+    await refresh();
+    if (!state.activeFilePath || !state.codexChangedFiles.has(state.activeFilePath.toLowerCase())) return;
+    if (state.editorDirty) {
+      $("#editorStatus").textContent = "Codex changed this file on disk. Save or reopen it to reconcile changes.";
+      return;
+    }
+    try {
+      const result = await api(`/api/arduino_file?path=${encodeURIComponent(state.activeFilePath)}`);
+      state.editorOriginalContent = result.content || "";
+      $("#sourceEditor").value = state.editorOriginalContent;
+      renderEditorLineNumbers();
+      $("#editorStatus").textContent = `Reloaded after Codex patch (${Number(result.bytes || 0)} bytes).`;
+      setEditorDirty(false);
+    } catch (_error) {
+      resetEditor("The active file was removed by Codex.");
+    }
+  } finally {
+    state.codexPatchSyncRunning = false;
+  }
 }
 
 async function refreshCodex() {
@@ -542,6 +598,7 @@ async function sendCodexMessage() {
           ? { path: state.activeFilePath, content: $("#sourceEditor").value }
           : {},
         verify_context: state.lastIssueText || state.lastVerifyText,
+        allow_edits: $("#codexAllowEdits").checked,
       }),
     });
     input.value = "";
@@ -559,6 +616,18 @@ async function newCodexThread() {
     await refreshCodex();
   } catch (error) {
     $("#codexStatus").textContent = error.message;
+  }
+}
+
+async function cancelCodexTurn() {
+  $("#cancelCodexBtn").disabled = true;
+  $("#codexStatus").textContent = "Cancelling Codex turn...";
+  try {
+    await api("/api/codex_cancel", { method: "POST", body: "{}" });
+    await refreshCodex();
+  } catch (error) {
+    $("#codexStatus").textContent = error.message;
+    $("#cancelCodexBtn").disabled = false;
   }
 }
 
@@ -774,6 +843,7 @@ function bindEvents() {
   $("#toggleCodexBtn").addEventListener("click", () => applyCodexPanel(!codexPanelOpen()));
   $("#closeCodexBtn").addEventListener("click", () => applyCodexPanel(false));
   $("#newCodexThreadBtn").addEventListener("click", newCodexThread);
+  $("#cancelCodexBtn").addEventListener("click", cancelCodexTurn);
   $("#codexComposer").addEventListener("submit", (event) => {
     event.preventDefault();
     sendCodexMessage();
