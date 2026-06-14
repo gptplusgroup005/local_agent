@@ -30,6 +30,7 @@ from talos.arduino import (
     write_workspace_file,
 )
 from talos.native_bridge import native_available
+from talos.codex_bridge import CODEX_BRIDGE
 
 ASSET_ROOT = Path(getattr(sys, "_MEIPASS", ROOT))
 FRONTEND = ASSET_ROOT / "web_frontend" if getattr(sys, "frozen", False) else ROOT / "ui" / "web_frontend"
@@ -74,6 +75,9 @@ def state_payload() -> dict[str, Any]:
             "POST /api/arduino_file",
             "POST /api/arduino_delete",
             "POST /api/arduino_verify",
+            "GET /api/codex_status",
+            "POST /api/codex_message",
+            "POST /api/codex_thread",
         ],
         "events": list(EVENTS),
     }
@@ -101,6 +105,9 @@ class LocalAgentWebHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/arduino_file":
             result = read_workspace_file(load_config(), query.get("path", [""])[0])
             self.send_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST)
+            return
+        if parsed.path == "/api/codex_status":
+            self.send_json(CODEX_BRIDGE.status())
             return
         path = parsed.path
         if path == "/":
@@ -153,6 +160,26 @@ class LocalAgentWebHandler(BaseHTTPRequestHandler):
             result = delete_workspace_file(load_config(), str(payload.get("path", "")))
             if result.get("ok"):
                 log_event(f"{now()} deleted Arduino file: {result.get('path')}")
+            self.send_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST)
+            return
+        if self.path == "/api/codex_message":
+            config = load_config()
+            workspace = workspace_summary(config)
+            active_file = payload.get("active_file")
+            if not isinstance(active_file, dict):
+                active_file = {}
+            result = CODEX_BRIDGE.send_message(
+                str(payload.get("message", "")),
+                workspace,
+                active_file,
+                str(payload.get("verify_context", "")),
+            )
+            if result.get("ok"):
+                log_event(f"{now()} started Codex turn")
+            self.send_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST)
+            return
+        if self.path == "/api/codex_thread":
+            result = CODEX_BRIDGE.new_thread()
             self.send_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST)
             return
         self.send_json({"error": "Not found."}, HTTPStatus.NOT_FOUND)
@@ -228,6 +255,7 @@ def main() -> None:
         pass
     finally:
         STOP_EVENT.set()
+        CODEX_BRIDGE.shutdown()
         server.server_close()
 
 if __name__ == "__main__":

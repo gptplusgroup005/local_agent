@@ -4,6 +4,9 @@
 
 Talos is a local tool server for Codex. Its job is to let Codex work with IDEs and apps outside VSCode. The first supported target is Arduino IDE: detect open sketches, resolve the real sketch folder, read and edit files, detect board settings, verify code in a sandbox, and support a repeatable debug loop.
 
+The primary UI is an IDE workbench, not a monitoring dashboard. Source editing is the central surface, with project discovery in Explorer, tool output in a lower panel, and future Codex/Arduino/MATLAB integrations arranged around that workspace.
+The global Talos navigation should remain secondary: compact by default, expandable on hover, and pinnable without taking permanent editor space.
+
 Short version:
 
 ```text
@@ -13,11 +16,11 @@ Talos = local bridge between Codex and external IDEs/apps, starting with Arduino
 ## Current Position
 
 ```text
-Current active stage: Stage 2 - Verify output cleanup
-Next major stage: Stage 3 - Arduino file workflow
+Current active stage: Stage 4 - Codex debug loop
+Next major stage: Stage 5 - Native C expansion
 ```
 
-Stage 1 is complete. Arduino sketch detection requires a live Arduino process or window signal; persisted workspace state is used only to resolve folder and board metadata. Board mapping prefers Arduino IDE's workspace-scoped board state over filename heuristics. Stage 2 is partly complete: ANSI cleanup, memory parsing, library parsing, and platform parsing are implemented. The remaining Stage 2 work is to surface compile issues by file and line in the UI.
+Stages 1 through 3 are complete. Talos can detect Arduino sketches and boards, present structured verify results, safely read or edit source files, and host a real Codex app-server conversation beside the editor. The active work is Stage 4: turning compile issues, Codex patches, and repeated sandbox verification into one compact debug loop.
 
 ## Progress Rules
 
@@ -55,6 +58,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\pipeline_status.ps1
 - [x] Ignore persisted Arduino workspace state after its sketch or IDE window is closed.
 - [x] Keep the selected workspace board synchronized with live Arduino IDE changes.
 - [x] Map each Arduino window to its own board through the IDE process tree.
+- [x] Prevent stale auto-refresh responses from reverting a newly selected sketch.
 
 ## Stage 2 - Verify Output Cleanup
 
@@ -65,23 +69,31 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\pipeline_status.ps1
 - [x] Parse used platform.
 - [x] Parse basic compile errors and warnings into `issues`.
 - [x] Show memory/library/platform summary in the Verify output UI.
-- [ ] Show compile issues by file and line in the Verify output UI.
-- [ ] Add a copy button for issue-only debug context.
+- [x] Show compile issues by file and line in the Verify output UI.
+- [x] Preserve Verify Output scrolling when compile issue details are visible.
+- [x] Let the Arduino results area fill available window height with one primary output scrollbar.
+- [x] Add a copy button for issue-only debug context.
 
 ## Stage 3 - Arduino File Workflow
 
 - [x] Expose scoped backend APIs to read, write, and delete workspace files.
 - [x] Show workspace file list in the Arduino UI.
-- [ ] Add a file viewer/editor for `.ino`, `.cpp`, `.h`, and related source files.
-- [ ] Save edited files back into the selected sketch folder.
-- [ ] Keep all file operations scoped inside the sketch workspace.
-- [ ] Add UI feedback for dirty/unsaved edited files.
+- [x] Add a file viewer/editor for `.ino`, `.cpp`, `.h`, and related source files.
+- [x] Save edited files back into the selected sketch folder.
+- [x] Keep all file operations scoped inside the sketch workspace.
+- [x] Add UI feedback for dirty/unsaved edited files.
+- [x] Promote the editor into a VSCode-style Explorer/Editor/Output workbench.
+- [x] Add a compact hover-expand navigation rail with a persisted pin state.
+- [x] Collapse the unpinned navigation rail immediately when the pointer leaves.
 
 ## Stage 4 - Codex Debug Loop
 
 - [x] Verify selected workspace in a sandbox copy.
 - [x] Copy verify output for pasting into Codex.
-- [ ] Feed parsed compile issues into a compact debug context.
+- [x] Add a collapsible Codex chat panel to the right side of the IDE workbench.
+- [x] Connect the panel to the locally authenticated Codex app-server runtime.
+- [x] Feed the selected workspace, active file, and parsed verify issues into compact Codex context.
+- [x] Keep Codex startup and UI polling non-blocking to avoid workbench lag.
 - [ ] Let Codex patch relevant files through Talos APIs.
 - [ ] Re-run verify after a Codex patch.
 - [ ] Keep a short history of verify attempts and patches.

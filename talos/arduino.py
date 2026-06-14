@@ -773,8 +773,25 @@ def parse_compile_issues(output: str) -> list[dict[str, object]]:
         )
     return issues
 
+def format_compile_issue_context(issues: list[dict[str, object]]) -> str:
+    if not issues:
+        return ""
+    lines = ["Arduino compile issues:"]
+    for issue in issues:
+        file_name = re.split(r"[\\/]", str(issue.get("file") or ""))[-1] or "compiler"
+        line = int(issue.get("line") or 0)
+        column = int(issue.get("column") or 0)
+        location = ":".join(
+            part for part in (file_name, str(line) if line else "", str(column) if column else "") if part
+        )
+        level = str(issue.get("level") or "error").upper()
+        message = str(issue.get("message") or "Unknown compiler issue.").strip()
+        lines.append(f"{level} {location} - {message}")
+    return "\n".join(lines)
+
 def parse_compile_output(output: str) -> dict[str, Any]:
     clean_output = strip_ansi(output).strip()
+    issues = parse_compile_issues(clean_output)
     return {
         "output": clean_output,
         "memory": {
@@ -783,7 +800,8 @@ def parse_compile_output(output: str) -> dict[str, Any]:
         },
         "libraries": parse_named_table(clean_output, "Used library"),
         "platforms": parse_named_table(clean_output, "Used platform"),
-        "issues": parse_compile_issues(clean_output),
+        "issues": issues,
+        "issue_context": format_compile_issue_context(issues),
     }
 
 def run_arduino_compile(config: dict[str, Any], timeout: int = 120) -> dict[str, Any]:
@@ -829,6 +847,7 @@ def run_arduino_compile(config: dict[str, Any], timeout: int = 120) -> dict[str,
             "libraries": parsed["libraries"],
             "platforms": parsed["platforms"],
             "issues": parsed["issues"],
+            "issue_context": parsed["issue_context"],
         }
     output = "\n".join(part.strip() for part in (completed.stdout, completed.stderr) if part and part.strip())
     parsed = parse_compile_output(output)
@@ -844,4 +863,5 @@ def run_arduino_compile(config: dict[str, Any], timeout: int = 120) -> dict[str,
         "libraries": parsed["libraries"],
         "platforms": parsed["platforms"],
         "issues": parsed["issues"],
+        "issue_context": parsed["issue_context"],
     }

@@ -6,14 +6,33 @@ const state = {
   arduinoBoardName: "",
   themeHydrated: false,
   lastVerifyText: "Sandbox compile has not been run.",
+  lastIssueText: "",
   lastRefreshAt: 0,
+  workspaceMutationVersion: 0,
+  workspaceMutationRunning: false,
+  workspaceSelectionRunning: false,
+  selectedWorkspacePath: "",
+  activeFilePath: "",
+  editorOriginalContent: "",
+  editorDirty: false,
+  editorLoading: false,
+  editorSaving: false,
+  codexBusy: false,
+  codexMessagesSignature: "",
+  codexRefreshPromise: null,
+  codexRefreshTimer: null,
 };
 
 const THEMES = ["light", "dark", "neutral"];
 const THEME_KEY = "talos-theme";
+const RAIL_PIN_KEY = "talos-rail-pinned";
+const CODEX_PANEL_KEY = "talos-codex-panel-open";
 const FAST_REFRESH_MS = 1000;
 const IDLE_REFRESH_MS = 5000;
 const REFRESH_TICK_MS = 250;
+const CODEX_BUSY_REFRESH_MS = 400;
+const CODEX_IDLE_REFRESH_MS = 3000;
+const CODEX_HIDDEN_REFRESH_MS = 8000;
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
@@ -32,7 +51,23 @@ async function api(path, options = {}) {
 function setView(viewId) {
   $$(".view").forEach((view) => view.classList.toggle("active", view.id === viewId));
   $$(".nav").forEach((button) => button.classList.toggle("active", button.dataset.view === viewId));
-  if (viewId === "workspace") refresh();
+  document.body.classList.toggle("workbench-mode", viewId === "workspace");
+  if (viewId === "workspace") {
+    refresh();
+    refreshCodex();
+  }
+}
+
+function codexPanelOpen() {
+  return localStorage.getItem(CODEX_PANEL_KEY) !== "false";
+}
+
+function applyCodexPanel(open) {
+  $(".ide-workbench")?.classList.toggle("codex-hidden", !open);
+  $("#toggleCodexBtn")?.classList.toggle("active", open);
+  $("#toggleCodexBtn")?.setAttribute("aria-pressed", String(Boolean(open)));
+  localStorage.setItem(CODEX_PANEL_KEY, String(Boolean(open)));
+  scheduleCodexRefresh(0);
 }
 
 function activeViewId() {
@@ -54,6 +89,22 @@ function applyTheme(theme) {
   localStorage.setItem(THEME_KEY, nextTheme);
   const input = document.querySelector(`input[name="theme"][value="${nextTheme}"]`);
   if (input) input.checked = true;
+}
+
+function railPinned() {
+  return document.documentElement.dataset.rail === "pinned";
+}
+
+function applyRailPinned(pinned) {
+  document.documentElement.dataset.rail = pinned ? "pinned" : "collapsed";
+  localStorage.setItem(RAIL_PIN_KEY, String(Boolean(pinned)));
+  const button = $("#pinRailBtn");
+  if (button) {
+    button.classList.toggle("active", pinned);
+    button.title = pinned ? "Unpin navigation" : "Pin navigation open";
+    button.setAttribute("aria-label", button.title);
+    button.setAttribute("aria-pressed", String(Boolean(pinned)));
+  }
 }
 
 function hydrateTheme(config = {}) {
@@ -137,11 +188,44 @@ function verifySummaryHtml(result = {}) {
   `;
 }
 
+function issueFileLabel(file = "") {
+  const parts = String(file).split(/[\\/]/);
+  return parts.pop() || String(file);
+}
+
+function verifyIssuesHtml(issues = []) {
+  if (!issues.length) return "";
+  return `
+    <section class="verify-issues" aria-label="Compile issues">
+      <div class="verify-section-title">Compile issues</div>
+      <div class="verify-issue-list">
+        ${issues.map((issue) => {
+          const level = String(issue.level || "error").toLowerCase();
+          const location = [
+            issueFileLabel(issue.file),
+            Number(issue.line || 0) || "",
+            Number(issue.column || 0) || "",
+          ].filter((value) => value !== "").join(":");
+          return `
+            <div class="verify-issue ${level === "warning" ? "warning" : "error"}">
+              <span class="verify-issue-level">${escapeHtml(level)}</span>
+              <code class="verify-issue-location" title="${escapeHtml(issue.file || "")}">${escapeHtml(location || "Compiler")}</code>
+              <span class="verify-issue-message">${escapeHtml(issue.message || "Unknown compiler issue.")}</span>
+            </div>
+          `;
+        }).join("")}
+      </div>
+    </section>
+  `;
+}
+
 function renderVerifyOutput(result = null, pendingText = "") {
   const output = $("#arduinoOutput");
   if (!result) {
     output.className = `verify-output ${pendingText ? "pending" : "empty"}`;
     state.lastVerifyText = pendingText || "Sandbox compile has not been run.";
+    state.lastIssueText = "";
+    $("#copyIssuesBtn").disabled = true;
     output.textContent = state.lastVerifyText;
     return;
   }
@@ -156,6 +240,8 @@ function renderVerifyOutput(result = null, pendingText = "") {
     "",
     result.output || "No compiler output.",
   ].filter(Boolean).join("\n");
+  state.lastIssueText = result.issue_context || "";
+  $("#copyIssuesBtn").disabled = !state.lastIssueText;
   output.className = `verify-output ${ok ? "passed" : "failed"}`;
   output.innerHTML = `
     <div class="verify-head">
@@ -165,6 +251,7 @@ function renderVerifyOutput(result = null, pendingText = "") {
     ${command ? `<div class="verify-field"><span>Command</span><code>${escapeHtml(command)}</code></div>` : ""}
     ${sandbox ? `<div class="verify-field"><span>Sandbox</span><code>${escapeHtml(sandbox)}</code></div>` : ""}
     ${verifySummaryHtml(result)}
+    ${verifyIssuesHtml(result.issues || [])}
     <pre class="verify-log">${escapeHtml(result.output || "No compiler output.")}</pre>
   `;
 }
@@ -187,6 +274,80 @@ async function copyText(text, statusSelector = "") {
 
 function fileListText() {
   return $$("#arduinoFiles tr").map((row) => [...row.children].map((cell) => cell.textContent.trim()).join("\t")).join("\n");
+}
+
+function setEditorDirty(dirty) {
+  state.editorDirty = Boolean(dirty);
+  $("#editorDirtyBadge").hidden = !state.editorDirty;
+  $("#saveFileBtn").disabled = !state.activeFilePath || !state.editorDirty || state.editorSaving;
+}
+
+function resetEditor(message = "No file selected.") {
+  state.activeFilePath = "";
+  state.editorOriginalContent = "";
+  state.editorLoading = false;
+  state.editorSaving = false;
+  $("#editorFileName").textContent = "Select a source file";
+  $("#sourceEditor").value = "";
+  $("#sourceEditor").disabled = true;
+  $("#editorStatus").textContent = message;
+  setEditorDirty(false);
+}
+
+function canDiscardEditorChanges() {
+  return !state.editorDirty || window.confirm("Discard unsaved changes in the current source file?");
+}
+
+async function openWorkspaceFile(path) {
+  if (!path || path === state.activeFilePath || state.editorLoading) return;
+  if (!canDiscardEditorChanges()) return;
+  state.editorLoading = true;
+  $("#editorStatus").textContent = `Loading ${path}...`;
+  try {
+    const result = await api(`/api/arduino_file?path=${encodeURIComponent(path)}`);
+    state.activeFilePath = result.path;
+    state.editorOriginalContent = result.content || "";
+    $("#editorFileName").textContent = result.path;
+    $("#sourceEditor").value = state.editorOriginalContent;
+    $("#sourceEditor").disabled = false;
+    $("#editorStatus").textContent = `${Number(result.bytes || 0)} bytes`;
+    setEditorDirty(false);
+    renderActiveFileRow();
+    $("#sourceEditor").focus();
+  } catch (error) {
+    $("#editorStatus").textContent = `Open failed: ${error.message}`;
+  } finally {
+    state.editorLoading = false;
+  }
+}
+
+function renderActiveFileRow() {
+  $$("#arduinoFiles tr").forEach((row) => {
+    row.classList.toggle("active", row.dataset.path === state.activeFilePath);
+  });
+}
+
+async function saveWorkspaceFile() {
+  if (!state.activeFilePath || !state.editorDirty || state.editorSaving) return;
+  state.editorSaving = true;
+  $("#saveFileBtn").disabled = true;
+  $("#editorStatus").textContent = `Saving ${state.activeFilePath}...`;
+  try {
+    const content = $("#sourceEditor").value;
+    const result = await api("/api/arduino_file", {
+      method: "POST",
+      body: JSON.stringify({ path: state.activeFilePath, content }),
+    });
+    state.editorOriginalContent = content;
+    $("#editorStatus").textContent = `Saved ${result.path} (${Number(result.bytes || 0)} bytes).`;
+    setEditorDirty(false);
+    await refresh();
+  } catch (error) {
+    $("#editorStatus").textContent = `Save failed: ${error.message}`;
+  } finally {
+    state.editorSaving = false;
+    $("#saveFileBtn").disabled = !state.activeFilePath || !state.editorDirty;
+  }
 }
 
 function setBoardField(fqbn = "", boardName = "") {
@@ -217,6 +378,11 @@ function renderStats(payload) {
 
 function renderArduino(arduino, force = false, ide = {}) {
   if (!arduino) return;
+  const workspaceChanged = normalizedWindowsPath(arduino.path) !== normalizedWindowsPath(state.selectedWorkspacePath);
+  if (workspaceChanged) {
+    state.selectedWorkspacePath = arduino.path || "";
+    resetEditor(arduino.valid ? "Select a source file." : "No valid workspace selected.");
+  }
   if (!state.arduinoDirty || force) {
     $("#arduinoPathInput").value = arduino.path || "";
   }
@@ -235,12 +401,133 @@ function renderArduino(arduino, force = false, ide = {}) {
     : "Set a sketch folder that contains at least one .ino file.";
   $("#verifyArduinoBtn").disabled = state.arduinoVerifyRunning || !arduino.configured;
   $("#arduinoFiles").innerHTML = (arduino.files || []).map((file) => `
-    <tr>
-      <td>${escapeHtml(file.path)}</td>
-      <td>${Number(file.lines || 0)}</td>
-      <td>${Number(file.bytes || 0)}</td>
+    <tr data-path="${escapeHtml(file.path)}" tabindex="0">
+      <td>
+        <span class="file-name">${escapeHtml(file.path)}</span>
+        <span class="file-meta">${Number(file.lines || 0)} lines · ${Number(file.bytes || 0)} bytes</span>
+      </td>
     </tr>
   `).join("");
+  $$("#arduinoFiles tr").forEach((row) => {
+    const open = () => openWorkspaceFile(row.dataset.path);
+    row.addEventListener("click", open);
+    row.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        open();
+      }
+    });
+  });
+  renderActiveFileRow();
+  renderCodexContext();
+}
+
+function renderCodexContext() {
+  const chips = $$("#codexContext span");
+  chips[0]?.classList.toggle("ready", Boolean(state.selectedWorkspacePath));
+  chips[1]?.classList.toggle("ready", Boolean(state.activeFilePath));
+  chips[2]?.classList.toggle(
+    "ready",
+    Boolean(state.lastIssueText || (state.lastVerifyText && !state.lastVerifyText.startsWith("Sandbox compile"))),
+  );
+}
+
+function codexAccountLabel(payload = {}) {
+  const account = payload.account || {};
+  if (!payload.available) return "Codex runtime not found";
+  if (payload.initializing) return "Starting local Codex...";
+  if (payload.error && !account.type) return "Sign-in required";
+  const plan = account.planType ? ` · ${account.planType}` : "";
+  const email = account.email ? `${account.email}${plan}` : `${account.type || "ChatGPT"}${plan}`;
+  return payload.connected ? email : "Connecting...";
+}
+
+function renderCodex(payload = {}) {
+  state.codexBusy = Boolean(payload.busy);
+  $("#codexAccount").textContent = codexAccountLabel(payload);
+  $("#sendCodexBtn").disabled = !payload.ok || state.codexBusy;
+  $("#codexInput").disabled = !payload.ok;
+  $("#newCodexThreadBtn").disabled = state.codexBusy;
+  $("#codexStatus").textContent = payload.error
+    || (state.codexBusy ? "Codex is working..." : payload.thread_id ? "Thread ready" : "Ready for a new thread");
+  const messages = payload.messages || [];
+  const signature = JSON.stringify(messages);
+  if (signature !== state.codexMessagesSignature) {
+    state.codexMessagesSignature = signature;
+    $("#codexMessages").innerHTML = messages.length
+      ? messages.map((message) => `
+          <article class="codex-message ${message.role === "user" ? "user" : "assistant"}">
+            <span class="codex-message-role">${message.role === "user" ? "You" : "Codex"}</span>
+            <div class="codex-message-body">${escapeHtml(message.text || "")}</div>
+          </article>
+        `).join("")
+      : `<div class="codex-empty">Ask Codex to inspect, edit, verify, or optimize the selected Arduino sketch.</div>`;
+    $("#codexMessages").scrollTop = $("#codexMessages").scrollHeight;
+  }
+  const activity = payload.activity || [];
+  $("#codexActivity").hidden = !activity.length;
+  $("#codexActivity").textContent = activity.join("\n");
+}
+
+async function refreshCodex() {
+  if (state.codexRefreshPromise) return state.codexRefreshPromise;
+  state.codexRefreshPromise = api("/api/codex_status")
+    .then(renderCodex)
+    .catch((error) => {
+      renderCodex({ available: true, connected: false, error: error.message });
+    })
+    .finally(() => {
+      state.codexRefreshPromise = null;
+      scheduleCodexRefresh();
+    });
+  return state.codexRefreshPromise;
+}
+
+function scheduleCodexRefresh(delay = null) {
+  window.clearTimeout(state.codexRefreshTimer);
+  const nextDelay = delay ?? (
+    document.hidden || activeViewId() !== "workspace" || !codexPanelOpen()
+      ? CODEX_HIDDEN_REFRESH_MS
+      : state.codexBusy
+        ? CODEX_BUSY_REFRESH_MS
+        : CODEX_IDLE_REFRESH_MS
+  );
+  state.codexRefreshTimer = window.setTimeout(refreshCodex, nextDelay);
+}
+
+async function sendCodexMessage() {
+  const input = $("#codexInput");
+  const message = input.value.trim();
+  if (!message || state.codexBusy) return;
+  $("#codexStatus").textContent = "Sending context to Codex...";
+  $("#sendCodexBtn").disabled = true;
+  try {
+    await api("/api/codex_message", {
+      method: "POST",
+      body: JSON.stringify({
+        message,
+        active_file: state.activeFilePath
+          ? { path: state.activeFilePath, content: $("#sourceEditor").value }
+          : {},
+        verify_context: state.lastIssueText || state.lastVerifyText,
+      }),
+    });
+    input.value = "";
+    await refreshCodex();
+  } catch (error) {
+    $("#codexStatus").textContent = error.message;
+    $("#sendCodexBtn").disabled = false;
+  }
+}
+
+async function newCodexThread() {
+  try {
+    await api("/api/codex_thread", { method: "POST", body: "{}" });
+    state.codexMessagesSignature = "";
+    await refreshCodex();
+  } catch (error) {
+    $("#codexStatus").textContent = error.message;
+  }
 }
 
 function renderArduinoProjects(projects = []) {
@@ -258,17 +545,28 @@ function renderArduinoProjects(projects = []) {
         </div>
         ${project.unsaved ? '<div class="project-path">Save this sketch in Arduino IDE to create a selectable workspace.</div>' : ""}
       </div>
-      <button class="button ghost select-project" data-index="${index}" ${project.valid ? "" : "disabled"}>Select</button>
+      <button class="button ghost select-project" data-index="${index}" ${project.valid && !state.workspaceSelectionRunning ? "" : "disabled"}>Select</button>
     </div>
   `).join("");
   $$(".select-project").forEach((button) => {
     button.addEventListener("click", async () => {
+      if (state.workspaceSelectionRunning) return;
+      if (!canDiscardEditorChanges()) return;
       const project = projects[Number(button.dataset.index)];
       if (!project?.path) return;
+      state.workspaceSelectionRunning = true;
+      $$(".select-project").forEach((item) => {
+        item.disabled = true;
+      });
       $("#arduinoPathInput").value = project.path;
       if (project.fqbn) setBoardField(project.fqbn, project.board_name || "");
       state.arduinoDirty = true;
-      await saveArduinoWorkspace();
+      try {
+        await saveArduinoWorkspace();
+      } finally {
+        state.workspaceSelectionRunning = false;
+        await refreshAfterWorkspaceMutation();
+      }
     });
   });
 }
@@ -292,10 +590,16 @@ function render(payload) {
 }
 
 async function refresh() {
+  if (state.workspaceMutationRunning) {
+    return state.refreshPromise || null;
+  }
   if (state.refreshPromise) return state.refreshPromise;
+  const mutationVersion = state.workspaceMutationVersion;
   state.refreshPromise = api("/api/state")
     .then((payload) => {
-      render(payload);
+      if (mutationVersion === state.workspaceMutationVersion) {
+        render(payload);
+      }
       state.lastRefreshAt = Date.now();
       return payload;
     })
@@ -305,6 +609,17 @@ async function refresh() {
   return state.refreshPromise;
 }
 
+async function refreshAfterWorkspaceMutation() {
+  if (state.refreshPromise) {
+    try {
+      await state.refreshPromise;
+    } catch (_error) {
+      // The fresh request below remains authoritative.
+    }
+  }
+  return refresh();
+}
+
 function maybeRefresh() {
   if (document.hidden) return;
   const interval = activeViewId() === "workspace" ? FAST_REFRESH_MS : IDLE_REFRESH_MS;
@@ -312,17 +627,22 @@ function maybeRefresh() {
 }
 
 async function saveArduinoWorkspace() {
-  const result = await api("/api/arduino_workspace", {
-    method: "POST",
-    body: JSON.stringify({
-      path: $("#arduinoPathInput").value,
-      fqbn: state.arduinoFqbnFull || $("#arduinoFqbnInput").value,
-    }),
-  });
-  state.arduinoDirty = false;
-  renderArduino(result.arduino, true);
-  await refresh();
-  return result;
+  state.workspaceMutationVersion += 1;
+  state.workspaceMutationRunning = true;
+  try {
+    const result = await api("/api/arduino_workspace", {
+      method: "POST",
+      body: JSON.stringify({
+        path: $("#arduinoPathInput").value,
+        fqbn: state.arduinoFqbnFull || $("#arduinoFqbnInput").value,
+      }),
+    });
+    state.arduinoDirty = false;
+    renderArduino(result.arduino, true);
+    return result;
+  } finally {
+    state.workspaceMutationRunning = false;
+  }
 }
 
 async function verifyArduinoWorkspace() {
@@ -402,13 +722,45 @@ async function snapWindow(kind) {
 }
 
 function bindEvents() {
+  applyRailPinned(railPinned());
+  applyCodexPanel(codexPanelOpen());
   $$(".nav").forEach((button) => button.addEventListener("click", () => setView(button.dataset.view)));
+  $("#pinRailBtn").addEventListener("click", () => applyRailPinned(!railPinned()));
   $("#refreshBtn").addEventListener("click", refresh);
-  $("#saveArduinoBtn").addEventListener("click", saveArduinoWorkspace);
+  $("#refreshWorkspaceBtn").addEventListener("click", refresh);
+  $("#saveArduinoBtn").addEventListener("click", async () => {
+    await saveArduinoWorkspace();
+    await refreshAfterWorkspaceMutation();
+  });
   $("#verifyArduinoBtn").addEventListener("click", verifyArduinoWorkspace);
   $("#saveSettingsBtn").addEventListener("click", saveSettings);
   $("#copyFilesBtn").addEventListener("click", () => copyText(fileListText(), "#arduinoMeta"));
+  $("#copyIssuesBtn").addEventListener("click", () => copyText(state.lastIssueText));
   $("#copyVerifyBtn").addEventListener("click", () => copyText(state.lastVerifyText));
+  $("#saveFileBtn").addEventListener("click", saveWorkspaceFile);
+  $("#toggleCodexBtn").addEventListener("click", () => applyCodexPanel(!codexPanelOpen()));
+  $("#closeCodexBtn").addEventListener("click", () => applyCodexPanel(false));
+  $("#newCodexThreadBtn").addEventListener("click", newCodexThread);
+  $("#codexComposer").addEventListener("submit", (event) => {
+    event.preventDefault();
+    sendCodexMessage();
+  });
+  $("#codexInput").addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      sendCodexMessage();
+    }
+  });
+  $("#sourceEditor").addEventListener("input", () => {
+    setEditorDirty($("#sourceEditor").value !== state.editorOriginalContent);
+    $("#editorStatus").textContent = state.editorDirty ? "Unsaved changes." : "No changes.";
+  });
+  $("#sourceEditor").addEventListener("keydown", (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+      event.preventDefault();
+      saveWorkspaceFile();
+    }
+  });
   $("#boardInfoBtn").addEventListener("click", () => {
     const panel = $("#boardInfoPanel");
     const isHidden = panel.hidden;
@@ -448,3 +800,4 @@ function bindEvents() {
 bindEvents();
 refresh();
 setInterval(maybeRefresh, REFRESH_TICK_MS);
+refreshCodex();

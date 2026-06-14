@@ -9,6 +9,7 @@ from talos.arduino import (
     delete_workspace_file,
     discover_arduino_projects,
     extract_ino_names,
+    format_compile_issue_context,
     parse_compile_output,
     read_workspace_file,
     run_arduino_compile,
@@ -18,8 +19,44 @@ from talos.arduino import (
 )
 from talos.core import language_label
 from talos.native_bridge import extract_board_name, extract_fqbn, native_available
+from talos.codex_bridge import CodexBridge, build_codex_prompt
 
 class TalosArduinoTests(unittest.TestCase):
+    def test_codex_prompt_contains_selected_arduino_context(self) -> None:
+        prompt = build_codex_prompt(
+            "Fix the compile error.",
+            {
+                "path": r"C:\Sketch\Blink",
+                "main_sketch": "Blink.ino",
+                "fqbn": "arduino:avr:uno",
+            },
+            {"path": "Blink.ino", "content": "void setup() {}\n"},
+            "ERROR Blink.ino:2:1 - expected declaration",
+        )
+
+        self.assertIn("Fix the compile error.", prompt)
+        self.assertIn(r"C:\Sketch\Blink", prompt)
+        self.assertIn("arduino:avr:uno", prompt)
+        self.assertIn("void setup()", prompt)
+        self.assertIn("ERROR Blink.ino:2:1", prompt)
+
+    def test_frontend_contains_codex_workbench_panel(self) -> None:
+        html = (Path(__file__).parents[1] / "ui" / "web_frontend" / "index.html").read_text(encoding="utf-8")
+
+        self.assertIn('id="codexPanel"', html)
+        self.assertIn('id="codexComposer"', html)
+        self.assertIn('id="toggleCodexBtn"', html)
+
+    def test_codex_status_starts_runtime_without_blocking_for_handshake(self) -> None:
+        bridge = CodexBridge()
+
+        with patch.object(bridge, "start_async") as start_async:
+            status = bridge.status()
+
+        start_async.assert_called_once_with()
+        self.assertFalse(status["connected"])
+        self.assertFalse(status["ok"])
+
     def test_board_mapping_uses_window_plugin_host_process_tree(self) -> None:
         windows = [
             {"pid": 101, "title": "first | Arduino IDE 2.3.4"},
@@ -379,6 +416,30 @@ class TalosArduinoTests(unittest.TestCase):
         self.assertEqual(parsed["memory"]["dynamic"]["used"], 13796)
         self.assertEqual(parsed["libraries"][0]["name"], "Wire")
         self.assertEqual(parsed["platforms"][0]["name"], "esp32:esp32")
+
+    def test_arduino_compile_output_parser_extracts_file_line_issues(self) -> None:
+        output = (
+            r"C:\Sketch\Blink.ino:14:7: error: 'missingValue' was not declared in this scope"
+            "\n"
+            r"C:\Sketch\helpers.cpp:8: warning: unused variable 'sample'"
+        )
+
+        issues = parse_compile_output(output)["issues"]
+
+        self.assertEqual(len(issues), 2)
+        self.assertEqual(issues[0]["file"], r"C:\Sketch\Blink.ino")
+        self.assertEqual(issues[0]["line"], 14)
+        self.assertEqual(issues[0]["column"], 7)
+        self.assertEqual(issues[0]["level"], "error")
+        self.assertEqual(issues[1]["line"], 8)
+        self.assertEqual(issues[1]["column"], 0)
+        self.assertEqual(issues[1]["level"], "warning")
+        self.assertEqual(
+            format_compile_issue_context(issues),
+            "Arduino compile issues:\n"
+            "ERROR Blink.ino:14:7 - 'missingValue' was not declared in this scope\n"
+            "WARNING helpers.cpp:8 - unused variable 'sample'",
+        )
 
     def test_arduino_sandbox_copy_ignores_build_artifacts(self) -> None:
         with TemporaryDirectory() as tmp:

@@ -18,7 +18,7 @@ def run_desktop_shell() -> None:
         )
         return
 
-    from talos.server import LocalAgentWebHandler, STOP_EVENT, find_port, worker_loop
+    from talos.server import CODEX_BRIDGE, LocalAgentWebHandler, STOP_EVENT, find_port, worker_loop
 
     host = "127.0.0.1"
     port = find_port(host, 8787)
@@ -70,6 +70,7 @@ def run_desktop_shell() -> None:
 
     def on_closed() -> None:
         STOP_EVENT.set()
+        CODEX_BRIDGE.shutdown()
         server.shutdown()
         server.server_close()
 

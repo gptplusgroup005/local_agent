@@ -8,6 +8,7 @@
       (() => {
         const theme = "__TALOS_THEME__";
         if (["light", "dark", "neutral"].includes(theme)) document.documentElement.dataset.theme = theme;
+        document.documentElement.dataset.rail = localStorage.getItem("talos-rail-pinned") === "true" ? "pinned" : "collapsed";
       })();
     </script>
     <link rel="stylesheet" href="/styles.css" />
@@ -36,14 +37,30 @@
     </div>
     <div class="scene">
       <aside class="rail">
-        <div class="brand-core">
-          <span class="brand-kicker">Codex Tool Server</span>
-          <span class="brand-name">Talos</span>
+        <div class="rail-head">
+          <div class="brand-core">
+            <span class="rail-icon brand-icon">T</span>
+            <span class="brand-copy">
+              <span class="brand-kicker">Codex Tool Server</span>
+              <span class="brand-name">Talos</span>
+            </span>
+          </div>
+          <button id="pinRailBtn" class="rail-pin" type="button" title="Pin navigation open" aria-label="Pin navigation open">
+            <span class="pin-glyph" aria-hidden="true"></span>
+          </button>
         </div>
-        <button class="nav active" data-view="dashboard">Server</button>
-        <button class="nav" data-view="workspace">Arduino</button>
-        <button class="nav" data-view="logs">Logs</button>
-        <button class="nav" data-view="settings">Settings</button>
+        <button class="nav active" data-view="dashboard" title="Server">
+          <span class="rail-icon">S</span><span class="nav-label">Server</span>
+        </button>
+        <button class="nav" data-view="workspace" title="Arduino">
+          <span class="rail-icon">A</span><span class="nav-label">Arduino</span>
+        </button>
+        <button class="nav" data-view="logs" title="Logs">
+          <span class="rail-icon">L</span><span class="nav-label">Logs</span>
+        </button>
+        <button class="nav" data-view="settings" title="Settings">
+          <span class="rail-icon">G</span><span class="nav-label">Settings</span>
+        </button>
       </aside>
 
       <main class="shell">
@@ -65,55 +82,110 @@
         </section>
 
         <section class="view" id="workspace">
-          <div class="holo-panel workspace-panel">
-            <div class="panel-title">Arduino workspace</div>
-            <div class="detected-panel">
-              <div class="panel-title">Detected open sketches</div>
-              <div id="arduinoProjects" class="project-list"></div>
-            </div>
-            <div class="form-grid">
-              <label>Sketch Folder<input id="arduinoPathInput" placeholder="C:\Users\...\Documents\Arduino\Blink" /></label>
-              <label>Board
-                <div class="board-field">
-                  <input id="arduinoFqbnInput" placeholder="No board detected" readonly />
-                  <button id="boardInfoBtn" class="info-button" type="button" title="Board details" aria-label="Board details">i</button>
-                  <div id="boardInfoPanel" class="info-popover" hidden></div>
-                </div>
-              </label>
-            </div>
-            <p id="arduinoStatus" class="status-text">No Arduino sketch folder configured.</p>
-            <div class="action-row">
-              <p id="arduinoMeta">Files will appear after a valid sketch folder is saved.</p>
-              <div class="button-row">
-                <button id="saveArduinoBtn" class="button ghost">Save Workspace</button>
-                <button id="verifyArduinoBtn" class="button primary">Verify Sandbox</button>
+          <div class="ide-workbench">
+            <aside class="ide-explorer">
+              <div class="ide-pane-head">
+                <span>Explorer</span>
+                <button id="refreshWorkspaceBtn" class="icon-button" type="button" title="Refresh workspace">Refresh</button>
               </div>
-            </div>
-            <div class="workspace-grid">
-              <div class="holo-panel table-panel workspace-files">
-                <div class="panel-head">
-                  <div class="panel-title">Files</div>
-                  <button id="copyFilesBtn" class="icon-button" type="button" title="Copy file list" aria-label="Copy file list">Copy</button>
+
+              <section class="ide-explorer-section sketches-section">
+                <div class="ide-section-label">Open sketches</div>
+                <div id="arduinoProjects" class="project-list"></div>
+              </section>
+
+              <section class="ide-explorer-section workspace-context">
+                <div class="ide-section-label">Workspace</div>
+                <label>Sketch folder<input id="arduinoPathInput" placeholder="C:\Users\...\Arduino\Blink" /></label>
+                <label>Board
+                  <div class="board-field">
+                    <input id="arduinoFqbnInput" placeholder="No board detected" readonly />
+                    <button id="boardInfoBtn" class="info-button" type="button" title="Board details" aria-label="Board details">i</button>
+                    <div id="boardInfoPanel" class="info-popover" hidden></div>
+                  </div>
+                </label>
+                <div class="explorer-actions">
+                  <button id="saveArduinoBtn" class="button ghost">Save Workspace</button>
                 </div>
-                <table>
-                  <thead>
-                    <tr>
-                      <th>File</th>
-                      <th>Lines</th>
-                      <th>Bytes</th>
-                    </tr>
-                  </thead>
-                  <tbody id="arduinoFiles"></tbody>
-                </table>
-              </div>
-              <div class="holo-panel detail-panel workspace-output">
+                <p id="arduinoStatus" class="status-text">No Arduino sketch folder configured.</p>
+              </section>
+
+              <section class="ide-explorer-section files-section">
                 <div class="panel-head">
-                  <div class="panel-title">Verify output</div>
-                  <button id="copyVerifyBtn" class="icon-button" type="button" title="Copy verify output" aria-label="Copy verify output">Copy</button>
+                  <div class="ide-section-label">Files</div>
+                  <div class="panel-actions">
+                    <button id="copyFilesBtn" class="icon-button" type="button" title="Copy file list" aria-label="Copy file list">Copy</button>
+                  </div>
+                </div>
+                <div class="workspace-file-list">
+                  <table>
+                    <tbody id="arduinoFiles"></tbody>
+                  </table>
+                </div>
+                <p id="arduinoMeta" class="status-text">Files will appear after a valid sketch folder is saved.</p>
+              </section>
+            </aside>
+
+            <main class="ide-editor-area">
+              <div class="editor-tabbar">
+                <div class="editor-tab active">
+                  <code id="editorFileName">No file open</code>
+                  <span id="editorDirtyBadge" class="editor-dirty-badge" hidden>Unsaved</span>
+                </div>
+                <div class="editor-actions">
+                  <button id="toggleCodexBtn" class="icon-button active" type="button" title="Toggle Codex panel" aria-label="Toggle Codex panel">Codex</button>
+                  <button id="saveFileBtn" class="icon-button" type="button" disabled>Save File</button>
+                  <button id="verifyArduinoBtn" class="button primary">Verify Sandbox</button>
+                </div>
+              </div>
+
+              <div class="source-editor">
+                <textarea id="sourceEditor" spellcheck="false" disabled placeholder="Select a source file from Explorer to view and edit it."></textarea>
+                <div id="editorStatus" class="editor-statusbar">No file selected.</div>
+              </div>
+
+              <section class="ide-output-panel">
+                <div class="output-tabbar">
+                  <div class="output-tab active">Verify output</div>
+                  <div class="panel-actions">
+                    <button id="copyIssuesBtn" class="icon-button" type="button" title="Copy compile issues only" aria-label="Copy compile issues only" disabled>Copy Issues</button>
+                    <button id="copyVerifyBtn" class="icon-button" type="button" title="Copy full verify output" aria-label="Copy full verify output">Copy All</button>
+                  </div>
                 </div>
                 <div id="arduinoOutput" class="verify-output empty">Sandbox compile has not been run.</div>
+              </section>
+            </main>
+
+            <aside id="codexPanel" class="codex-panel" aria-label="Codex chat">
+              <div class="codex-head">
+                <div>
+                  <span class="codex-title">Codex</span>
+                  <span id="codexAccount" class="codex-account">Connecting...</span>
+                </div>
+                <div class="panel-actions">
+                  <button id="newCodexThreadBtn" class="icon-button" type="button" title="New Codex thread">New</button>
+                  <button id="closeCodexBtn" class="icon-button codex-close" type="button" title="Hide Codex panel" aria-label="Hide Codex panel">&times;</button>
+                </div>
               </div>
-            </div>
+              <div id="codexContext" class="codex-context">
+                <span>Workspace</span>
+                <span>Active file</span>
+                <span>Verify output</span>
+              </div>
+              <div id="codexMessages" class="codex-messages" aria-live="polite">
+                <div class="codex-empty">
+                  Ask Codex to inspect, edit, verify, or optimize the selected Arduino sketch.
+                </div>
+              </div>
+              <div id="codexActivity" class="codex-activity" hidden></div>
+              <form id="codexComposer" class="codex-composer">
+                <textarea id="codexInput" rows="3" placeholder="Ask Codex about this sketch..." aria-label="Message Codex"></textarea>
+                <div class="codex-compose-row">
+                  <span id="codexStatus">Connecting to local Codex...</span>
+                  <button id="sendCodexBtn" class="button primary" type="submit">Send</button>
+                </div>
+              </form>
+            </aside>
           </div>
         </section>
 
