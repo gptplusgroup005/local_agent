@@ -395,24 +395,30 @@ def discover_arduino_projects(
     config: dict[str, Any],
     titles: list[str] | None = None,
     ino_paths: list[str] | None = None,
+    ide_processes: list[dict[str, object]] | None = None,
     tool_processes: list[dict[str, object]] | None = None,
+    window_rows: list[dict[str, object]] | None = None,
     open_workspaces: list[dict[str, object]] | None = None,
     workspace_boards: dict[str, dict[str, str]] | None = None,
 ) -> list[dict[str, Any]]:
-    implicit_detection = titles is None and ino_paths is None and tool_processes is None
-    processes = list_arduino_ide_processes() if implicit_detection else []
+    auto_detection = titles is None and ino_paths is None
+    processes = ide_processes if ide_processes is not None else (
+        list_arduino_ide_processes() if auto_detection else []
+    )
     arduino_processes = tool_processes if tool_processes is not None else (
-        list_arduino_tool_processes() if implicit_detection else []
+        list_arduino_tool_processes() if auto_detection else []
     )
     open_workspace_rows = open_workspaces if open_workspaces is not None else (
-        list_arduino_open_workspaces() if implicit_detection else []
+        list_arduino_open_workspaces() if auto_detection else []
     )
     workspace_board_map = workspace_boards if workspace_boards is not None else (
-        list_arduino_workspace_boards() if implicit_detection else {}
+        list_arduino_workspace_boards() if auto_detection else {}
     )
     boards = detected_boards(arduino_processes)
-    window_rows = list_window_rows() if implicit_detection else []
-    title_boards = boards_by_window_title(window_rows, arduino_processes)
+    detected_window_rows = window_rows if window_rows is not None else (
+        list_window_rows() if auto_detection else []
+    )
+    title_boards = boards_by_window_title(detected_window_rows, arduino_processes)
     window_titles = titles if titles is not None else []
     if titles is None:
         window_titles.extend(
@@ -420,13 +426,18 @@ def discover_arduino_projects(
             for process in processes
             if str(process.get("title") or "").strip()
         )
-        for title in open_window_titles():
+        source_titles = [
+            str(row.get("title") or "")
+            for row in detected_window_rows
+            if str(row.get("title") or "").strip()
+        ] or open_window_titles()
+        for title in source_titles:
             lower = title.lower()
             if ("arduino" in lower or ".ino" in lower) and title not in window_titles:
                 window_titles.append(title)
     open_ino_paths = list(ino_paths or [])
     path_sources: dict[str, str] = {}
-    if implicit_detection:
+    if ino_paths is None:
         for process in processes:
             for path in process.get("ino_paths", []):
                 if isinstance(path, str):

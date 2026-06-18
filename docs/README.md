@@ -131,6 +131,12 @@ Run the normal project verification flow:
 
 This rebuilds the native DLL, checks that the current Python bridge can load the expected native exports, runs the regression tests, and prints the pipeline status.
 
+Run the manual Arduino MVP smoke test before treating Arduino support as ready:
+
+```text
+docs\ARDUINO_SMOKE_TEST.md
+```
+
 Build:
 
 ```powershell

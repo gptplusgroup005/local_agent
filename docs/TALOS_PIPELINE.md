@@ -35,8 +35,8 @@ Talos can be considered Arduino-ready when these are true:
 - [x] Codex can receive workspace context, edit files through Talos, and trigger verify again.
 - [x] Updated native DLL is built and loaded with current process/window exports.
 - [x] Native DLL build/check is part of normal verification so native regressions are caught early.
-- [ ] Hot-path Arduino process/window detection avoids PowerShell/CIM when the native DLL is available.
-- [ ] One manual end-to-end Arduino smoke test is documented: detect sketch, edit file, verify, ask Codex, apply patch, verify again.
+- [x] Hot-path Arduino process/window detection avoids PowerShell/CIM when the native DLL is available.
+- [x] One manual end-to-end Arduino smoke test is documented: detect sketch, edit file, verify, ask Codex, apply patch, verify again.
 
 ## Progress Rules
 
@@ -137,8 +137,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\pipeline_status.ps1
 - [x] Move Arduino process presence and parent PID snapshot into native C with Python fallback.
 - [x] Build and load the updated DLL with the new native process/window exports.
 - [x] Add native build/check command to normal verification flow.
-- [ ] Reduce dependence on PowerShell/CIM for hot-path detection when native exports are available.
-- [ ] Document the Arduino end-to-end smoke test.
+- [x] Reduce dependence on PowerShell/CIM for hot-path detection when native exports are available.
+- [x] Document the Arduino end-to-end smoke test.
 
 ## Future Backlog - Other Apps
 

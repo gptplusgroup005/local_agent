@@ -28,7 +28,14 @@ from talos.arduino import (
     write_workspace_file,
 )
 from talos.codex_bridge import CODEX_BRIDGE
-from talos.native_bridge import native_available
+from talos.native_bridge import (
+    list_arduino_ide_processes,
+    list_arduino_open_workspaces,
+    list_arduino_tool_processes,
+    list_arduino_workspace_boards,
+    list_window_rows,
+    native_available,
+)
 from talos.run_history import record_verify, run_history
 
 ASSET_ROOT = Path(getattr(sys, "_MEIPASS", ROOT))
@@ -43,7 +50,22 @@ def log_event(message: str) -> None:
 
 def state_payload() -> dict[str, Any]:
     config = load_config()
-    arduino_projects = discover_arduino_projects(config)
+    ide_processes = list_arduino_ide_processes()
+    tool_processes = list_arduino_tool_processes()
+    window_rows = list_window_rows()
+    window_titles = [
+        str(row.get("title") or "")
+        for row in window_rows
+        if str(row.get("title") or "").strip()
+    ]
+    arduino_projects = discover_arduino_projects(
+        config,
+        ide_processes=ide_processes,
+        tool_processes=tool_processes,
+        window_rows=window_rows,
+        open_workspaces=list_arduino_open_workspaces(),
+        workspace_boards=list_arduino_workspace_boards(),
+    )
     arduino_summary = workspace_summary(config)
     return {
         "name": "Talos",
@@ -56,7 +78,11 @@ def state_payload() -> dict[str, Any]:
             "arduino_fqbn": config.get("arduino_fqbn", ""),
         },
         "arduino": arduino_summary,
-        "arduino_ide": arduino_ide_status(),
+        "arduino_ide": arduino_ide_status(
+            processes=ide_processes,
+            tool_processes=tool_processes,
+            titles=window_titles,
+        ),
         "arduino_projects": arduino_projects,
         "tools": [
             "GET /api/state",

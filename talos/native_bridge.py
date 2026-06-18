@@ -23,6 +23,7 @@ WINDOW_ROW_BUFFER_CHARS = 131072
 PROCESS_ROW_BUFFER_CHARS = 131072
 INO_BUFFER_CHARS = 4096
 _CACHE_TTL_SECONDS = 0.45
+_COMMAND_LINE_CACHE_TTL_SECONDS = 3.0
 _CACHE: dict[str, tuple[float, object]] = {}
 _HAS_NATIVE_WINDOW_ROWS = False
 _HAS_NATIVE_PROCESS_ROWS = False
@@ -63,9 +64,12 @@ def native_available() -> bool:
     return _LIBRARY is not None
 
 def cached_value(key: str, loader):
+    return cached_value_ttl(key, loader, _CACHE_TTL_SECONDS)
+
+def cached_value_ttl(key: str, loader, ttl_seconds: float):
     now = time.monotonic()
     cached = _CACHE.get(key)
-    if cached and now - cached[0] <= _CACHE_TTL_SECONDS:
+    if cached and now - cached[0] <= ttl_seconds:
         return cached[1]
     value = loader()
     _CACHE[key] = (now, value)
@@ -335,10 +339,44 @@ def list_arduino_ide_processes_uncached() -> list[dict[str, object]]:
     return list_arduino_ide_processes_wmic()
 
 def list_arduino_tool_processes_uncached() -> list[dict[str, object]]:
+    native_processes = list_arduino_process_rows_native()
+    if native_processes:
+        command_processes = list(
+            cached_value_ttl(
+                "arduino_tool_command_processes",
+                list_arduino_tool_processes_commandline_uncached,
+                _COMMAND_LINE_CACHE_TTL_SECONDS,
+            )
+        )
+        return merge_native_process_rows(native_processes, command_processes)
+    return list_arduino_tool_processes_commandline_uncached()
+
+def list_arduino_tool_processes_commandline_uncached() -> list[dict[str, object]]:
     processes = list_arduino_tool_processes_powershell()
     if processes:
         return processes
     return list_arduino_tool_processes_wmic()
+
+def merge_native_process_rows(
+    native_processes: list[dict[str, object]],
+    command_processes: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    command_by_pid = {
+        int(process.get("pid") or 0): process
+        for process in command_processes
+        if int(process.get("pid") or 0)
+    }
+    merged: list[dict[str, object]] = []
+    for native_process in native_processes:
+        row = dict(native_process)
+        command_row = command_by_pid.get(int(row.get("pid") or 0))
+        if command_row:
+            for key in ("command_line", "ino_paths", "fqbn", "board_name"):
+                value = command_row.get(key)
+                if value:
+                    row[key] = value
+        merged.append(row)
+    return merged
 
 def list_arduino_ide_processes_wmic() -> list[dict[str, object]]:
     command = [

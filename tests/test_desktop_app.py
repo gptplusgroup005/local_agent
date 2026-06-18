@@ -3,6 +3,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from talos import native_bridge
 from talos.arduino import (
     boards_by_window_title,
     copy_workspace_to_sandbox,
@@ -35,6 +36,7 @@ from talos.codex_bridge import (
     snapshot_workspace,
 )
 from talos.run_history import record_patch, record_verify, run_history
+from talos.server import state_payload
 
 class TalosArduinoTests(unittest.TestCase):
     def test_codex_prompt_contains_selected_arduino_context(self) -> None:
@@ -158,6 +160,12 @@ class TalosArduinoTests(unittest.TestCase):
         self.assertIn("_HAS_NATIVE_WINDOW_ROWS", check_script)
         self.assertIn("_HAS_NATIVE_PROCESS_ROWS", check_script)
         self.assertIn("unittest tests.test_desktop_app", check_script)
+
+        smoke_test = (Path(__file__).parents[1] / "docs" / "ARDUINO_SMOKE_TEST.md").read_text(encoding="utf-8")
+        self.assertIn("Verify Sandbox", smoke_test)
+        self.assertIn("Codex", smoke_test)
+        self.assertIn("Pass Criteria", smoke_test)
+        self.assertIn("Fail Conditions", smoke_test)
 
     def test_codex_thread_summary_prefers_name_and_supports_unix_time(self) -> None:
         summary = normalize_codex_thread(
@@ -345,6 +353,57 @@ class TalosArduinoTests(unittest.TestCase):
         self.assertEqual(rows[1]["created_at"], 0)
         self.assertEqual(rows[1]["fqbn"], "")
 
+    def test_native_tool_processes_merge_native_snapshot_with_cached_command_lines(self) -> None:
+        native_bridge._CACHE.clear()
+        native_rows = [
+            {
+                "name": "Arduino IDE.exe",
+                "pid": 101,
+                "parent_pid": 1,
+                "created_at": 10,
+                "title": "",
+                "command_line": "",
+                "ino_paths": [],
+                "fqbn": "",
+                "board_name": "",
+            },
+            {
+                "name": "arduino-language-server.exe",
+                "pid": 102,
+                "parent_pid": 101,
+                "created_at": 11,
+                "title": "",
+                "command_line": "",
+                "ino_paths": [],
+                "fqbn": "",
+                "board_name": "",
+            },
+        ]
+        command_rows = [
+            {
+                "name": "arduino-language-server.exe",
+                "pid": 102,
+                "parent_pid": 101,
+                "created_at": 11,
+                "title": "",
+                "command_line": "-fqbn esp32:esp32:esp32 -board-name ESP32",
+                "ino_paths": [],
+                "fqbn": "esp32:esp32:esp32",
+                "board_name": "ESP32",
+            }
+        ]
+
+        with (
+            patch("talos.native_bridge.list_arduino_process_rows_native", return_value=native_rows),
+            patch("talos.native_bridge.list_arduino_tool_processes_commandline_uncached", return_value=command_rows) as command_scan,
+        ):
+            first = native_bridge.list_arduino_tool_processes_uncached()
+            second = native_bridge.list_arduino_tool_processes_uncached()
+
+        self.assertEqual(command_scan.call_count, 1)
+        self.assertEqual(first[1]["fqbn"], "esp32:esp32:esp32")
+        self.assertEqual(second[1]["board_name"], "ESP32")
+
     def test_arduino_discovery_maps_open_sketches_to_folders(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp) / "Arduino"
@@ -398,6 +457,42 @@ class TalosArduinoTests(unittest.TestCase):
             self.assertEqual(len(projects), 1)
             self.assertEqual(projects[0]["sketch"], "test.ino")
             self.assertEqual(projects[0]["source"], "window_title")
+
+    def test_arduino_discovery_reuses_supplied_window_rows(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Arduino"
+            sketch = root / "test"
+            sketch.mkdir(parents=True)
+            (sketch / "test.ino").write_text("void setup() {}\nvoid loop() {}\n", encoding="utf-8")
+
+            with patch("talos.arduino.open_window_titles", side_effect=AssertionError("window titles should be reused")):
+                projects = discover_arduino_projects(
+                    {"arduino_search_roots": str(root)},
+                    window_rows=[{"pid": 123, "title": "test | Arduino IDE 2.3.4"}],
+                    tool_processes=[],
+                    open_workspaces=[],
+                    workspace_boards={},
+                )
+
+            self.assertEqual(len(projects), 1)
+            self.assertEqual(projects[0]["sketch"], "test.ino")
+
+    def test_state_payload_reuses_one_detection_snapshot(self) -> None:
+        config = {"theme": "light", "arduino_workspace_path": "", "arduino_fqbn": ""}
+        with (
+            patch("talos.server.load_config", return_value=config),
+            patch("talos.server.list_arduino_ide_processes", return_value=[]) as ide_scan,
+            patch("talos.server.list_arduino_tool_processes", return_value=[]) as tool_scan,
+            patch("talos.server.list_window_rows", return_value=[{"pid": 0, "title": "test | Arduino IDE 2.3.4"}]) as window_scan,
+            patch("talos.server.list_arduino_open_workspaces", return_value=[]),
+            patch("talos.server.list_arduino_workspace_boards", return_value={}),
+        ):
+            payload = state_payload()
+
+        self.assertEqual(ide_scan.call_count, 1)
+        self.assertEqual(tool_scan.call_count, 1)
+        self.assertEqual(window_scan.call_count, 1)
+        self.assertTrue(payload["arduino_ide"]["running"])
 
     def test_arduino_discovery_does_not_include_configured_folder_without_open_ide_signal(self) -> None:
         with TemporaryDirectory() as tmp:
