@@ -583,15 +583,17 @@ def read_workspace_file(config: dict[str, Any], relative_path: str) -> dict[str,
     path, error = resolve_workspace_file(config, relative_path, must_exist=True)
     if error or path is None:
         return {"ok": False, "error": error}
-    if path.stat().st_size > MAX_FILE_BYTES:
-        return {"ok": False, "error": f"File is too large to read safely: {path.stat().st_size} bytes."}
+    stat = path.stat()
+    if stat.st_size > MAX_FILE_BYTES:
+        return {"ok": False, "error": f"File is too large to read safely: {stat.st_size} bytes."}
     workspace = configured_workspace(config)
     assert workspace is not None
     return {
         "ok": True,
         "path": path.relative_to(workspace).as_posix(),
         "content": path.read_text(encoding="utf-8", errors="replace"),
-        "bytes": path.stat().st_size,
+        "bytes": stat.st_size,
+        "mtime_ns": stat.st_mtime_ns,
     }
 
 def write_workspace_file(config: dict[str, Any], relative_path: str, content: str) -> dict[str, Any]:
@@ -602,10 +604,12 @@ def write_workspace_file(config: dict[str, Any], relative_path: str, content: st
     assert workspace is not None
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8", newline="\n")
+    stat = path.stat()
     return {
         "ok": True,
         "path": path.relative_to(workspace).as_posix(),
-        "bytes": path.stat().st_size,
+        "bytes": stat.st_size,
+        "mtime_ns": stat.st_mtime_ns,
     }
 
 def delete_workspace_file(config: dict[str, Any], relative_path: str) -> dict[str, Any]:

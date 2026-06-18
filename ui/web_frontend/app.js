@@ -14,9 +14,11 @@ const state = {
   selectedWorkspacePath: "",
   activeFilePath: "",
   editorOriginalContent: "",
+  editorFileMtimeNs: 0,
   editorDirty: false,
   editorLoading: false,
   editorSaving: false,
+  editorDiskChecking: false,
   codexBusy: false,
   codexMessagesSignature: "",
   codexRefreshPromise: null,
@@ -44,6 +46,7 @@ const CODEX_BUSY_REFRESH_MS = 400;
 const CODEX_IDLE_REFRESH_MS = 3000;
 const CODEX_HIDDEN_REFRESH_MS = 8000;
 const VERIFY_WAIT_TIMEOUT_MS = 130000;
+const ACTIVE_FILE_POLL_MS = 700;
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
@@ -431,11 +434,25 @@ function renderEditorLineNumbers() {
   ).join("\n");
 }
 
+function applyEditorFileResult(result, statusText = "") {
+  state.activeFilePath = result.path;
+  state.editorOriginalContent = result.content || "";
+  state.editorFileMtimeNs = Number(result.mtime_ns || 0);
+  $("#editorFileName").textContent = result.path;
+  $("#sourceEditor").value = state.editorOriginalContent;
+  renderEditorLineNumbers();
+  $("#sourceEditor").disabled = false;
+  $("#editorStatus").textContent = statusText || `${Number(result.bytes || 0)} bytes`;
+  setEditorDirty(false);
+}
+
 function resetEditor(message = "No file selected.") {
   state.activeFilePath = "";
   state.editorOriginalContent = "";
+  state.editorFileMtimeNs = 0;
   state.editorLoading = false;
   state.editorSaving = false;
+  state.editorDiskChecking = false;
   $("#editorFileName").textContent = "Select a source file";
   $("#sourceEditor").value = "";
   renderEditorLineNumbers();
@@ -455,14 +472,7 @@ async function openWorkspaceFile(path) {
   $("#editorStatus").textContent = `Loading ${path}...`;
   try {
     const result = await api(`/api/arduino_file?path=${encodeURIComponent(path)}`);
-    state.activeFilePath = result.path;
-    state.editorOriginalContent = result.content || "";
-    $("#editorFileName").textContent = result.path;
-    $("#sourceEditor").value = state.editorOriginalContent;
-    renderEditorLineNumbers();
-    $("#sourceEditor").disabled = false;
-    $("#editorStatus").textContent = `${Number(result.bytes || 0)} bytes`;
-    setEditorDirty(false);
+    applyEditorFileResult(result);
     renderActiveFileRow();
     $("#sourceEditor").focus();
   } catch (error) {
@@ -490,6 +500,7 @@ async function saveWorkspaceFile() {
       body: JSON.stringify({ path: state.activeFilePath, content }),
     });
     state.editorOriginalContent = content;
+    state.editorFileMtimeNs = Number(result.mtime_ns || 0);
     $("#editorStatus").textContent = `Saved ${result.path} (${Number(result.bytes || 0)} bytes).`;
     setEditorDirty(false);
     await refresh();
@@ -498,6 +509,59 @@ async function saveWorkspaceFile() {
   } finally {
     state.editorSaving = false;
     $("#saveFileBtn").disabled = !state.activeFilePath || !state.editorDirty;
+  }
+}
+
+function selectEditorLine(lineNumber) {
+  const editor = $("#sourceEditor");
+  if (!lineNumber || editor.disabled) return;
+  const lines = editor.value.split("\n");
+  const lineIndex = Math.min(Math.max(lineNumber - 1, 0), lines.length - 1);
+  let start = 0;
+  for (let index = 0; index < lineIndex; index += 1) {
+    start += lines[index].length + 1;
+  }
+  const end = Math.min(editor.value.length, start + lines[lineIndex].length);
+  editor.focus();
+  editor.setSelectionRange(start, end);
+}
+
+function lineFromGutterEvent(event) {
+  const gutter = $("#editorLineNumbers");
+  const style = window.getComputedStyle(gutter);
+  const lineHeight = Number.parseFloat(style.lineHeight) || 20;
+  const paddingTop = Number.parseFloat(style.paddingTop) || 0;
+  const y = event.clientY - gutter.getBoundingClientRect().top + gutter.scrollTop - paddingTop;
+  return Math.floor(Math.max(0, y) / lineHeight) + 1;
+}
+
+async function checkActiveFileOnDisk() {
+  if (
+    document.hidden
+    || activeViewId() !== "workspace"
+    || !state.activeFilePath
+    || state.editorDirty
+    || state.editorLoading
+    || state.editorSaving
+    || state.editorDiskChecking
+  ) {
+    return;
+  }
+  state.editorDiskChecking = true;
+  try {
+    const result = await api(`/api/arduino_file?path=${encodeURIComponent(state.activeFilePath)}`);
+    const nextMtime = Number(result.mtime_ns || 0);
+    if (nextMtime && state.editorFileMtimeNs && nextMtime === state.editorFileMtimeNs) return;
+    if ((result.content || "") === state.editorOriginalContent) {
+      state.editorFileMtimeNs = nextMtime;
+      return;
+    }
+    applyEditorFileResult(result, `Reloaded from disk (${Number(result.bytes || 0)} bytes).`);
+    renderActiveFileRow();
+  } catch (error) {
+    resetEditor(`Active file reload failed: ${error.message}`);
+  } finally {
+    state.editorDiskChecking = false;
   }
 }
 
@@ -749,11 +813,7 @@ async function syncWorkspaceAfterCodexPatch(patch = {}) {
       } else {
         try {
           const result = await api(`/api/arduino_file?path=${encodeURIComponent(state.activeFilePath)}`);
-          state.editorOriginalContent = result.content || "";
-          $("#sourceEditor").value = state.editorOriginalContent;
-          renderEditorLineNumbers();
-          $("#editorStatus").textContent = `Reloaded after Codex patch (${Number(result.bytes || 0)} bytes).`;
-          setEditorDirty(false);
+          applyEditorFileResult(result, `Reloaded after Codex patch (${Number(result.bytes || 0)} bytes).`);
         } catch (_error) {
           resetEditor("The active file was removed by Codex.");
         }
@@ -1135,6 +1195,16 @@ function bindEvents() {
   $("#sourceEditor").addEventListener("scroll", () => {
     $("#editorLineNumbers").scrollTop = $("#sourceEditor").scrollTop;
   });
+  $("#editorLineNumbers").addEventListener("mousedown", (event) => {
+    event.preventDefault();
+    selectEditorLine(lineFromGutterEvent(event));
+  });
+  $("#editorLineNumbers").addEventListener("mousemove", (event) => {
+    if (event.buttons === 1) {
+      event.preventDefault();
+      selectEditorLine(lineFromGutterEvent(event));
+    }
+  });
   $("#boardInfoBtn").addEventListener("click", () => {
     const panel = $("#boardInfoPanel");
     const isHidden = panel.hidden;
@@ -1180,4 +1250,5 @@ if (["dashboard", "workspace", "logs", "settings"].includes(requestedView)) {
 }
 refresh();
 setInterval(maybeRefresh, REFRESH_TICK_MS);
+setInterval(checkActiveFileOnDisk, ACTIVE_FILE_POLL_MS);
 refreshCodex();

@@ -1613,6 +1613,7 @@ textarea:focus {
   line-height: 1.55;
   text-align: right;
   user-select: none;
+  cursor: pointer;
 }
 
 .ide-editor-area #sourceEditor {

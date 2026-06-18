@@ -131,6 +131,11 @@ class TalosArduinoTests(unittest.TestCase):
         self.assertIn("Patch applied. Verifying sandbox...", script)
         self.assertIn("formatDuration", script)
         self.assertIn("timings.compile", script)
+        self.assertIn("ACTIVE_FILE_POLL_MS", script)
+        self.assertIn("checkActiveFileOnDisk", script)
+        self.assertIn("selectEditorLine", script)
+        self.assertIn("lineFromGutterEvent", script)
+        self.assertIn("setInterval(checkActiveFileOnDisk", script)
         self.assertIn("View all (", script)
         self.assertIn("relativeTimeLabel", script)
         self.assertIn("showCodexTasks(true)", script)
@@ -153,6 +158,7 @@ class TalosArduinoTests(unittest.TestCase):
         self.assertIn("display: none;", styles)
         self.assertIn("[hidden]", styles)
         self.assertIn("display: none !important;", styles)
+        self.assertIn("cursor: pointer;", styles)
         self.assertNotIn("--codex-panel-width", styles)
 
         check_script = (Path(__file__).parents[1] / "scripts" / "check.ps1").read_text(encoding="utf-8")
@@ -801,6 +807,8 @@ class TalosArduinoTests(unittest.TestCase):
             self.assertTrue(write_result["ok"])
             self.assertTrue(read_result["ok"])
             self.assertIn("void setup", read_result["content"])
+            self.assertIsInstance(write_result["mtime_ns"], int)
+            self.assertIsInstance(read_result["mtime_ns"], int)
             self.assertTrue(delete_result["ok"])
             self.assertFalse((root / "Blink.ino").exists())
 
