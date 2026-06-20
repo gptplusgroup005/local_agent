@@ -31,6 +31,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "theme": "light",
     "arduino_workspace_path": "",
     "arduino_fqbn": "",
+    "virtual_patch_enabled": True,
 }
 
 def read_json_file(path: Path, fallback: Any, encoding: str = "utf-8") -> Any:
@@ -56,6 +57,10 @@ def load_config() -> dict[str, Any]:
     config = DEFAULT_CONFIG | data if isinstance(data, dict) else DEFAULT_CONFIG.copy()
     if str(config.get("theme", "light")) not in {"light", "dark", "neutral"}:
         config["theme"] = "light"
+    virtual_patch_enabled = config.get("virtual_patch_enabled", True)
+    if isinstance(virtual_patch_enabled, str):
+        virtual_patch_enabled = virtual_patch_enabled.strip().lower() not in {"0", "false", "no", "off"}
+    config["virtual_patch_enabled"] = bool(virtual_patch_enabled)
     return config
 
 def save_config(config: dict[str, Any]) -> None:

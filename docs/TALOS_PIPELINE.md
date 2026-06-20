@@ -128,6 +128,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\pipeline_status.ps1
 - [x] Remove the duplicate native build script, no-op worker loop, legacy local chat cache, and obsolete workspace CSS architecture.
 - [x] Re-run verify automatically after a Codex patch in the selected workspace.
 - [x] Keep a short local history of verify attempts and Codex patches.
+- [x] Stream Codex patch previews into the active Talos editor before final disk sync and sandbox verify.
+- [x] Keep the active Talos editor open across Codex patch refreshes and transient workspace snapshots.
+- [x] Stage Codex file changes outside the Arduino sketch, show a color diff, then apply into the Talos editor or reject explicitly; only Save File updates Arduino IDE.
+- [x] Create a virtual patch slot for every Talos workspace file, with a persisted toolbar toggle for manual review or automatic apply.
 
 ## Stage 5 - Native C Expansion
 

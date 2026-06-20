@@ -7,15 +7,17 @@ import shutil
 import subprocess
 import threading
 import time
+from difflib import unified_diff
 from pathlib import Path
 from typing import Any
 
 from talos.core import ROOT, load_app_identity, now
-from talos.run_history import record_patch
+from talos.arduino import is_source_file
 
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 PATCH_IGNORED_DIRS = {".git", ".talos_sandbox", "__pycache__", "build", "dist"}
 PATCH_FILE_LIMIT = 2_000_000
+STAGING_ROOT = ROOT / ".talos_staging"
 THREAD_SANDBOX_MODE = "workspace-write"
 CODEX_TURN_TIMEOUT_SECONDS = 300
 CODEX_THREAD_REFRESH_SECONDS = 15
@@ -113,7 +115,8 @@ def build_codex_prompt(
         sections.append(f"Latest sandbox verify context:\n{verify_context.strip()}")
     if allow_edits:
         sections.append(
-            "You may edit relevant files directly inside the selected Arduino workspace. "
+            "You may edit relevant files inside the Talos staging copy of the selected Arduino workspace. "
+            "Talos will show the resulting diff for review before applying it to the real Arduino sketch. "
             "Keep changes focused, preserve unrelated code, and summarize every changed file."
         )
     else:
@@ -173,6 +176,60 @@ def diff_workspace_snapshots(
         )
     return changes
 
+def prepare_staging_workspace(source_workspace: str | Path) -> Path:
+    source = Path(source_workspace).resolve()
+    if not source.is_dir():
+        raise RuntimeError("The selected Arduino workspace is not available for staging.")
+    key = hashlib.sha256(str(source).lower().encode("utf-8")).hexdigest()[:16]
+    staging = STAGING_ROOT / key
+    if staging.exists():
+        shutil.rmtree(staging, ignore_errors=True)
+    shutil.copytree(
+        source,
+        staging,
+        ignore=shutil.ignore_patterns(*PATCH_IGNORED_DIRS, ".talos_*"),
+    )
+    return staging.resolve()
+
+def staged_patch_files(
+    source_workspace: str | Path,
+    staging_workspace: str | Path,
+    changes: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    source = Path(source_workspace).resolve()
+    staging = Path(staging_workspace).resolve()
+    files: list[dict[str, Any]] = []
+    for change in changes:
+        relative = str(change.get("path") or "").replace("\\", "/")
+        source_path = (source / relative).resolve()
+        staging_path = (staging / relative).resolve()
+        try:
+            source_path.relative_to(source)
+            staging_path.relative_to(staging)
+        except ValueError:
+            continue
+        if not is_source_file(staging_path if staging_path.exists() else source_path):
+            continue
+        before = source_path.read_text(encoding="utf-8", errors="replace") if source_path.exists() else ""
+        after = staging_path.read_text(encoding="utf-8", errors="replace") if staging_path.exists() else ""
+        kind = str(change.get("kind") or "update")
+        files.append(
+            {
+                **change,
+                "path": relative,
+                "kind": kind,
+                "diff": "".join(unified_diff(
+                    before.splitlines(keepends=True),
+                    after.splitlines(keepends=True),
+                    fromfile=relative,
+                    tofile=relative,
+                )),
+                "review_status": "pending",
+                **({"content": after} if kind != "delete" else {}),
+            }
+        )
+    return files
+
 class CodexBridge:
     def __init__(self) -> None:
         self._process: subprocess.Popen[str] | None = None
@@ -197,9 +254,11 @@ class CodexBridge:
         self._patch_revision = 0
         self._patch_event_revision = 0
         self._turn_workspace = ""
+        self._turn_staging_workspace = ""
         self._turn_track_changes = False
         self._turn_snapshot: dict[str, dict[str, Any]] = {}
         self._turn_protocol_changes: dict[str, dict[str, Any]] = {}
+        self._turn_protocol_revision = 0
         self._turn_diff = ""
         self._remote_threads: list[dict[str, Any]] = []
         self._remote_threads_updated_at = 0.0
@@ -226,6 +285,12 @@ class CodexBridge:
                 "patches": list(self._patches[-20:]),
                 "patch_revision": self._patch_revision,
                 "patch_event_revision": self._patch_event_revision,
+                "pending_patch": {
+                    "workspace": self._turn_workspace,
+                    "files": list(self._turn_protocol_changes.values()),
+                    "diff": self._turn_diff,
+                    "revision": self._turn_protocol_revision,
+                } if self._turn_running and self._turn_protocol_changes else None,
                 "conversations": self._thread_summaries(),
             }
 
@@ -328,7 +393,8 @@ class CodexBridge:
                 return {"ok": False, "error": "Codex is still working on the previous request."}
             if not self._account:
                 return {"ok": False, "error": self._error or "Codex is not signed in."}
-            workspace_path = str(workspace.get("path") or ROOT)
+            workspace_path = str(Path(workspace.get("path") or ROOT).resolve())
+            staging_path = str(prepare_staging_workspace(workspace_path)) if allow_edits else workspace_path
             self._messages.append(
                 {
                     "id": f"user-{len(self._messages) + 1}",
@@ -341,9 +407,11 @@ class CodexBridge:
             self._error = ""
             self._turn_error = ""
             self._turn_workspace = workspace_path
+            self._turn_staging_workspace = staging_path
             self._turn_track_changes = allow_edits
-            self._turn_snapshot = snapshot_workspace(workspace_path) if allow_edits else {}
+            self._turn_snapshot = snapshot_workspace(staging_path) if allow_edits else {}
             self._turn_protocol_changes = {}
+            self._turn_protocol_revision = 0
             self._turn_diff = ""
         prompt = build_codex_prompt(
             text,
@@ -354,10 +422,50 @@ class CodexBridge:
         )
         threading.Thread(
             target=self._run_turn,
-            args=(prompt, workspace_path, allow_edits),
+            args=(prompt, staging_path, allow_edits),
             daemon=True,
         ).start()
         return {"ok": True, "status": "started"}
+
+    def apply_patch(self, patch_id: str, workspace: str, relative_path: str) -> dict[str, Any]:
+        with self._lock:
+            patch = next((item for item in self._patches if item.get("id") == patch_id), None)
+            if patch is None:
+                return {"ok": False, "error": "Codex patch was not found."}
+            if patch.get("review_status") != "pending":
+                return {"ok": False, "error": "Codex patch is no longer pending review."}
+            if Path(str(patch.get("workspace") or "")).resolve() != Path(workspace).resolve():
+                return {"ok": False, "error": "Codex patch belongs to a different workspace."}
+            target = str(relative_path or "").replace("\\", "/")
+            file = next((item for item in patch.get("files") or [] if item.get("path") == target), None)
+            if file is None:
+                return {"ok": False, "error": "Codex patch does not change the selected file."}
+            if file.get("review_status", "pending") != "pending":
+                return {"ok": False, "error": "This file is no longer pending review."}
+            if file.get("kind") == "delete":
+                return {"ok": False, "error": "Deleting a file from the editor is not supported yet."}
+            file["review_status"] = "editor"
+            if not any(item.get("review_status", "pending") == "pending" for item in patch.get("files") or []):
+                patch["review_status"] = "editor"
+            self._append_activity(f"Applied Codex virtual patch to Talos editor: {target}.")
+            return {"ok": True, "patch": dict(patch), "file": dict(file)}
+
+    def reject_patch(self, patch_id: str, relative_path: str) -> dict[str, Any]:
+        with self._lock:
+            patch = next((item for item in self._patches if item.get("id") == patch_id), None)
+            if patch is None:
+                return {"ok": False, "error": "Codex patch was not found."}
+            if patch.get("review_status") != "pending":
+                return {"ok": False, "error": "Codex patch is no longer pending review."}
+            target = str(relative_path or "").replace("\\", "/")
+            file = next((item for item in patch.get("files") or [] if item.get("path") == target), None)
+            if file is None or file.get("review_status", "pending") != "pending":
+                return {"ok": False, "error": "This file is no longer pending review."}
+            file["review_status"] = "rejected"
+            if not any(item.get("review_status", "pending") == "pending" for item in patch.get("files") or []):
+                patch["review_status"] = "rejected"
+            self._append_activity(f"Rejected Codex virtual patch: {target}.")
+            return {"ok": True, "patch": dict(patch), "file": dict(file)}
 
     def new_thread(self) -> dict[str, Any]:
         with self._lock:
@@ -624,6 +732,7 @@ class CodexBridge:
                 self._capture_protocol_changes(params.get("changes") or [])
             elif method == "turn/diff/updated":
                 self._turn_diff = str(params.get("diff") or "")
+                self._turn_protocol_revision += 1
             elif method == "turn/completed":
                 turn = params.get("turn") or {}
                 self._finalize_turn_patch()
@@ -703,7 +812,7 @@ class CodexBridge:
             self._append_activity(f"Applied {len(changes)} file change(s).")
 
     def _capture_protocol_changes(self, changes: list[dict[str, Any]]) -> None:
-        workspace = Path(self._turn_workspace).resolve() if self._turn_workspace else None
+        workspace = Path(self._turn_staging_workspace).resolve() if self._turn_staging_workspace else None
         if workspace is None:
             return
         for change in changes:
@@ -724,14 +833,16 @@ class CodexBridge:
                 "kind": kind,
                 "diff": str(change.get("diff") or ""),
             }
+            self._turn_protocol_revision += 1
 
     def _finalize_turn_patch(self) -> None:
         workspace = self._turn_workspace
+        staging_workspace = self._turn_staging_workspace
         before = self._turn_snapshot
-        if not workspace or not self._turn_track_changes:
+        if not workspace or not staging_workspace or not self._turn_track_changes:
             self._clear_turn_patch_state()
             return
-        after = snapshot_workspace(workspace)
+        after = snapshot_workspace(staging_workspace)
         snapshot_changes = diff_workspace_snapshots(before, after)
         merged: dict[str, dict[str, Any]] = {
             change["path"]: dict(change)
@@ -739,7 +850,7 @@ class CodexBridge:
         }
         for path, change in self._turn_protocol_changes.items():
             merged.setdefault(path, {}).update(change)
-        files = [merged[path] for path in sorted(merged, key=str.lower)]
+        files = staged_patch_files(workspace, staging_workspace, [merged[path] for path in sorted(merged, key=str.lower)])
         if files:
             self._patch_revision += 1
             self._patch_event_revision += 1
@@ -747,21 +858,24 @@ class CodexBridge:
                 "id": f"patch-{self._patch_revision}",
                 "time": now(),
                 "workspace": workspace,
+                "staging_workspace": staging_workspace,
                 "files": files,
                 "diff": self._turn_diff,
                 "event_revision": self._patch_event_revision,
+                "review_status": "pending",
             }
             self._patches.append(patch)
             del self._patches[:-20]
-            record_patch(patch)
-            self._append_activity(f"Recorded Codex patch across {len(files)} file(s).")
+            self._append_activity(f"Prepared Codex patch review across {len(files)} file(s).")
         self._clear_turn_patch_state()
 
     def _clear_turn_patch_state(self) -> None:
         self._turn_workspace = ""
+        self._turn_staging_workspace = ""
         self._turn_track_changes = False
         self._turn_snapshot = {}
         self._turn_protocol_changes = {}
+        self._turn_protocol_revision = 0
         self._turn_diff = ""
 
     def _append_activity(self, text: str) -> None:

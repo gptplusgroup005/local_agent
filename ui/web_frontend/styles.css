@@ -1053,6 +1053,97 @@ textarea:focus {
   text-transform: none;
 }
 
+.codex-review-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 38px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  color: var(--text);
+  background: var(--accent-subtle);
+  font-size: 12px;
+}
+
+.codex-review-bar[hidden],
+.codex-diff-preview[hidden] {
+  display: none;
+}
+
+.codex-diff-preview {
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 0;
+  background: var(--panel);
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.codex-diff-line {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  width: 100%;
+  min-height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  line-height: inherit;
+  text-align: left;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  cursor: text;
+}
+
+.codex-diff-line.selected {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.codex-diff-number {
+  padding: 0 9px 0 4px;
+  border-right: 1px solid var(--line-soft);
+  color: var(--muted);
+  background: var(--canvas-subtle);
+  text-align: right;
+  user-select: none;
+}
+
+.codex-diff-content {
+  min-width: 0;
+  padding: 0 12px;
+  user-select: text;
+}
+
+.codex-diff-line.add {
+  color: #116329;
+  background: #dafbe1;
+}
+
+.codex-diff-line.remove {
+  color: #a40e26;
+  background: #ffebe9;
+}
+
+.codex-diff-line.meta {
+  color: var(--muted);
+  background: var(--canvas-subtle);
+}
+
+[data-theme="dark"] .codex-diff-line.add {
+  color: #7ee787;
+  background: #16351f;
+}
+
+[data-theme="dark"] .codex-diff-line.remove {
+  color: #ff7b72;
+  background: #4c1f26;
+}
+
 .editor-tab {
   position: relative;
   display: flex;
@@ -1569,6 +1660,24 @@ textarea:focus {
   text-transform: uppercase;
 }
 
+.virtual-patch-badge {
+  width: max-content;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.virtual-patch-badge.pending {
+  color: #9a6700;
+}
+
+.virtual-patch-badge.off {
+  color: var(--muted);
+  font-weight: 400;
+}
+
 .codex-compose-row .button {
   min-width: 68px;
   min-height: 28px;
@@ -1587,6 +1696,14 @@ textarea:focus {
   gap: 0;
   padding: 0;
   overflow: hidden;
+}
+
+.ide-editor-area .source-editor.reviewing {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.ide-editor-area .source-editor.reviewing .editor-canvas {
+  display: none;
 }
 
 .editor-canvas {

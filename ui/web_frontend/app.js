@@ -12,6 +12,7 @@ const state = {
   workspaceMutationRunning: false,
   workspaceSelectionRunning: false,
   selectedWorkspacePath: "",
+  activeFileByWorkspace: {},
   activeFilePath: "",
   editorOriginalContent: "",
   editorFileMtimeNs: 0,
@@ -26,7 +27,18 @@ const state = {
   codexPatchRevision: 0,
   codexPatchEventRevision: null,
   codexChangedFiles: new Set(),
-  codexPatchSyncRunning: false,
+  codexPreviewRevision: 0,
+  codexPreviewPath: "",
+  codexPreviewStreaming: false,
+  codexPreviewTimer: null,
+  codexPreviewCommitted: false,
+  codexPreviewBaseContent: "",
+  codexPreviewContent: "",
+  codexReviewPatch: null,
+  codexPatches: [],
+  codexApplyingPatchId: "",
+  virtualPatchEnabled: true,
+  virtualPatches: {},
   codexConversationSignature: "",
   codexHistoryExpanded: false,
   codexConversations: [],
@@ -45,7 +57,6 @@ const REFRESH_TICK_MS = 250;
 const CODEX_BUSY_REFRESH_MS = 400;
 const CODEX_IDLE_REFRESH_MS = 3000;
 const CODEX_HIDDEN_REFRESH_MS = 8000;
-const VERIFY_WAIT_TIMEOUT_MS = 130000;
 const ACTIVE_FILE_POLL_MS = 700;
 
 const $ = (selector) => document.querySelector(selector);
@@ -181,6 +192,17 @@ function hydrateTheme(config = {}) {
   }
   const stored = localStorage.getItem(THEME_KEY);
   if (THEMES.includes(stored)) applyTheme(stored);
+}
+
+function hydrateVirtualPatchMode(config = {}) {
+  state.virtualPatchEnabled = config.virtual_patch_enabled !== false;
+  const button = $("#virtualPatchToggleBtn");
+  button.classList.toggle("active", state.virtualPatchEnabled);
+  button.textContent = state.virtualPatchEnabled ? "Patch: On" : "Patch: Off";
+  button.title = state.virtualPatchEnabled
+    ? "Virtual patches are enabled: review and apply Codex changes manually"
+    : "Virtual patch review is hidden; Codex changes remain staged and are never applied automatically";
+  button.setAttribute("aria-pressed", String(state.virtualPatchEnabled));
 }
 
 function hydrateAppIdentity(app = {}) {
@@ -447,9 +469,21 @@ function renderEditorLineNumbers() {
 
 function applyEditorFileResult(result, statusText = "") {
   state.activeFilePath = result.path;
+  if (state.selectedWorkspacePath && result.path) {
+    state.activeFileByWorkspace[normalizedWindowsPath(state.selectedWorkspacePath)] = result.path;
+  }
   state.editorOriginalContent = result.content || "";
   state.editorFileMtimeNs = Number(result.mtime_ns || 0);
+  state.codexPreviewPath = "";
+  state.codexPreviewStreaming = false;
+  state.codexPreviewCommitted = false;
+  state.codexPreviewBaseContent = "";
+  state.codexPreviewContent = "";
+  state.codexReviewPatch = null;
+  if (state.codexPreviewTimer) window.clearTimeout(state.codexPreviewTimer);
+  state.codexPreviewTimer = null;
   $("#editorFileName").textContent = result.path;
+  setCodexReviewMode(null);
   $("#sourceEditor").value = state.editorOriginalContent;
   renderEditorLineNumbers();
   $("#sourceEditor").disabled = false;
@@ -464,7 +498,16 @@ function resetEditor(message = "No file selected.") {
   state.editorLoading = false;
   state.editorSaving = false;
   state.editorDiskChecking = false;
+  state.codexPreviewPath = "";
+  state.codexPreviewStreaming = false;
+  state.codexPreviewCommitted = false;
+  state.codexPreviewBaseContent = "";
+  state.codexPreviewContent = "";
+  state.codexReviewPatch = null;
+  if (state.codexPreviewTimer) window.clearTimeout(state.codexPreviewTimer);
+  state.codexPreviewTimer = null;
   $("#editorFileName").textContent = "Select a source file";
+  setCodexReviewMode(null);
   $("#sourceEditor").value = "";
   renderEditorLineNumbers();
   $("#sourceEditor").disabled = true;
@@ -485,6 +528,7 @@ async function openWorkspaceFile(path) {
     const result = await api(`/api/arduino_file?path=${encodeURIComponent(path)}`);
     applyEditorFileResult(result);
     renderActiveFileRow();
+    refreshCodexReview(state.codexPatches);
     $("#sourceEditor").focus();
   } catch (error) {
     $("#editorStatus").textContent = `Open failed: ${error.message}`;
@@ -512,6 +556,10 @@ async function saveWorkspaceFile() {
     });
     state.editorOriginalContent = content;
     state.editorFileMtimeNs = Number(result.mtime_ns || 0);
+    if (state.virtualPatches[state.activeFilePath]?.status === "editor") {
+      state.virtualPatches[state.activeFilePath] = { status: "saved" };
+      renderArduinoFilesAfterCodexPatch();
+    }
     $("#editorStatus").textContent = `Saved ${result.path} (${Number(result.bytes || 0)} bytes).`;
     setEditorDirty(false);
     await refresh();
@@ -555,6 +603,8 @@ async function checkActiveFileOnDisk() {
     || state.editorLoading
     || state.editorSaving
     || state.editorDiskChecking
+    || state.codexPreviewStreaming
+    || state.codexPreviewCommitted
   ) {
     return;
   }
@@ -588,6 +638,277 @@ function normalizedWindowsPath(value = "") {
   return String(value).trim().replaceAll("/", "\\").replace(/\\+$/, "").toLowerCase();
 }
 
+function applyUnifiedDiff(original, diffText) {
+  const diffLines = String(diffText || "").split("\n");
+  const originalLines = String(original || "").split("\n");
+  const output = [];
+  let oldIndex = 0;
+  let sawHunk = false;
+
+  for (let index = 0; index < diffLines.length; index += 1) {
+    const header = diffLines[index].match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+    if (!header) continue;
+    sawHunk = true;
+    const oldStart = Math.max(0, Number(header[1]) - 1);
+    while (oldIndex < oldStart && oldIndex < originalLines.length) {
+      output.push(originalLines[oldIndex]);
+      oldIndex += 1;
+    }
+    index += 1;
+    while (index < diffLines.length && !diffLines[index].startsWith("@@ ")) {
+      const line = diffLines[index];
+      if (line.startsWith(" ")) {
+        output.push(line.slice(1));
+        oldIndex += 1;
+      } else if (line.startsWith("-")) {
+        oldIndex += 1;
+      } else if (line.startsWith("+")) {
+        output.push(line.slice(1));
+      } else if (line.startsWith("--- ") || line.startsWith("+++ ") || line.startsWith("diff ")) {
+        index -= 1;
+        break;
+      }
+      index += 1;
+    }
+    index -= 1;
+  }
+
+  if (!sawHunk) return null;
+  while (oldIndex < originalLines.length) {
+    output.push(originalLines[oldIndex]);
+    oldIndex += 1;
+  }
+  return output.join("\n");
+}
+
+function streamEditorContent(targetContent, path) {
+  if (!path || path !== state.activeFilePath) return;
+  if ($("#sourceEditor").value === targetContent) return;
+  if (state.codexPreviewTimer) window.clearTimeout(state.codexPreviewTimer);
+  state.codexPreviewPath = path;
+  state.codexPreviewStreaming = true;
+  state.codexPreviewCommitted = false;
+  state.codexPreviewBaseContent = state.editorOriginalContent;
+  state.codexPreviewContent = String(targetContent || "");
+  $("#editorStatus").textContent = `Streaming Codex patch into ${path}...`;
+  setCodexReviewMode({
+    streaming: true,
+    workspace: state.selectedWorkspacePath,
+    files: [{ path, content: state.codexPreviewContent, review_status: "pending" }],
+  });
+  state.codexPreviewStreaming = false;
+  state.codexPreviewCommitted = true;
+}
+
+function previewPendingCodexPatch(pendingPatch = {}) {
+  if (!state.virtualPatchEnabled) return;
+  const revision = Number(pendingPatch.revision || 0);
+  if (!revision || revision === state.codexPreviewRevision || !state.activeFilePath || state.editorDirty) return;
+  const patchWorkspace = normalizedWindowsPath(pendingPatch.workspace || "");
+  const selectedWorkspace = normalizedWindowsPath(state.selectedWorkspacePath);
+  if (patchWorkspace && selectedWorkspace && patchWorkspace !== selectedWorkspace) return;
+  const activePath = normalizedWindowsPath(state.activeFilePath);
+  const change = (pendingPatch.files || []).find((file) => normalizedWindowsPath(file.path) === activePath);
+  if (!change?.diff) return;
+  const targetContent = applyUnifiedDiff(state.editorOriginalContent, change.diff);
+  if (targetContent === null || targetContent === state.editorOriginalContent) return;
+  state.codexPreviewRevision = revision;
+  streamEditorContent(targetContent, state.activeFilePath);
+}
+
+function virtualDiffRows(editorContent = "", virtualContent = "") {
+  const before = String(editorContent).split("\n");
+  const after = String(virtualContent).split("\n");
+  let prefix = 0;
+  while (prefix < before.length && prefix < after.length && before[prefix] === after[prefix]) prefix += 1;
+  let suffix = 0;
+  while (
+    suffix < before.length - prefix
+    && suffix < after.length - prefix
+    && before[before.length - suffix - 1] === after[after.length - suffix - 1]
+  ) suffix += 1;
+  const rows = [
+    { kind: "meta", text: "--- Talos editor" },
+    { kind: "meta", text: "+++ Virtual patch" },
+    { kind: "meta", text: `@@ -1,${before.length} +1,${after.length} @@` },
+  ];
+  let oldLine = 1;
+  let newLine = 1;
+  before.slice(0, prefix).forEach((text) => {
+    rows.push({ kind: "context", text, oldLine: oldLine++, newLine: newLine++ });
+  });
+  before.slice(prefix, before.length - suffix).forEach((text) => {
+    rows.push({ kind: "remove", text, oldLine: oldLine++ });
+  });
+  after.slice(prefix, after.length - suffix).forEach((text) => {
+    rows.push({ kind: "add", text, newLine: newLine++ });
+  });
+  before.slice(before.length - suffix).forEach((text) => {
+    rows.push({ kind: "context", text, oldLine: oldLine++, newLine: newLine++ });
+  });
+  return rows;
+}
+
+function selectDiffLine(row) {
+  $$(".codex-diff-line.selected").forEach((item) => item.classList.remove("selected"));
+  row.classList.add("selected");
+  const selection = window.getSelection();
+  const range = document.createRange();
+  range.selectNodeContents(row.querySelector(".codex-diff-content") || row);
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
+function renderCodexDiff(editorContent = "", virtualContent = "") {
+  const preview = $("#codexDiffPreview");
+  preview.innerHTML = virtualDiffRows(editorContent, virtualContent).map((row) => {
+    const lineNumber = row.newLine || row.oldLine || "";
+    const prefix = row.kind === "add" ? "+" : row.kind === "remove" ? "-" : " ";
+    return `<button class="codex-diff-line ${row.kind}" type="button"><span class="codex-diff-number">${lineNumber}</span><span class="codex-diff-content">${escapeHtml(`${prefix}${row.text || ""}`)}</span></button>`;
+  }).join("");
+  $$(".codex-diff-line").forEach((row) => row.addEventListener("click", () => selectDiffLine(row)));
+}
+
+function setCodexReviewMode(patch = null) {
+  state.codexReviewPatch = patch;
+  const activeFile = state.activeFilePath;
+  const file = patch && (patch.files || []).find((item) => item.path === activeFile);
+  const virtualContent = file && Object.hasOwn(file, "content") ? String(file.content || "") : null;
+  const differsFromEditor = virtualContent !== null && $("#sourceEditor").value !== virtualContent;
+  const reviewing = Boolean(
+    state.virtualPatchEnabled
+    && patch
+    && file
+    && file.review_status !== "rejected"
+    && file.kind !== "delete"
+    && differsFromEditor
+  );
+  $(".source-editor").classList.toggle("reviewing", reviewing);
+  $("#codexReviewBar").hidden = !reviewing;
+  $("#codexDiffPreview").hidden = !reviewing;
+  if (!reviewing) {
+    $("#codexDiffPreview").innerHTML = "";
+    $("#rejectCodexPatchBtn").hidden = false;
+    $("#applyCodexPatchBtn").textContent = "Apply Patch";
+    if (activeFile) $("#sourceEditor").disabled = false;
+    return;
+  }
+  const pending = (file.review_status || "pending") === "pending";
+  const streaming = Boolean(patch.streaming);
+  $("#codexReviewLabel").textContent = streaming
+    ? `Streaming virtual patch: ${file.path}`
+    : `Virtual patch comparison: ${file.path}`;
+  $("#applyCodexPatchBtn").textContent = streaming ? "Apply Stream" : pending ? "Apply Patch" : "Restore Patch";
+  $("#applyCodexPatchBtn").disabled = false;
+  $("#rejectCodexPatchBtn").hidden = !pending || streaming;
+  renderCodexDiff($("#sourceEditor").value, virtualContent);
+  $("#sourceEditor").disabled = true;
+  $("#saveFileBtn").disabled = true;
+}
+
+function refreshCodexReview(patches = []) {
+  state.codexPatches = patches;
+  Object.keys(state.virtualPatches).forEach((path) => {
+    state.virtualPatches[path].status = "clean";
+  });
+  const workspacePatches = patches.filter((patch) => (
+    normalizedWindowsPath(patch.workspace || "") === normalizedWindowsPath(state.selectedWorkspacePath)
+  ));
+  workspacePatches.forEach((patch) => {
+    (patch.files || []).forEach((file) => {
+      if (state.virtualPatches[file.path]) {
+        state.virtualPatches[file.path] = { status: file.review_status || "pending", patchId: patch.id };
+      }
+    });
+  });
+  renderArduinoFilesAfterCodexPatch();
+  const pending = workspacePatches.find((patch) => (
+    (patch.files || []).some((file) => (
+      file.path === state.activeFilePath
+      && file.review_status !== "rejected"
+      && file.kind !== "delete"
+      && Object.hasOwn(file, "content")
+      && $("#sourceEditor").value !== String(file.content || "")
+    ))
+  ));
+  setCodexReviewMode(state.virtualPatchEnabled ? pending || null : null);
+}
+
+async function applyCodexPatch(patch = state.codexReviewPatch) {
+  if (!patch) return;
+  const virtualFile = (patch.files || []).find((file) => file.path === state.activeFilePath);
+  if (!virtualFile || !Object.hasOwn(virtualFile, "content")) return;
+  const content = String(virtualFile.content || "");
+  setCodexReviewMode(null);
+  $("#sourceEditor").value = content;
+  renderEditorLineNumbers();
+  state.codexPreviewBaseContent = "";
+  state.codexPreviewContent = "";
+  state.codexPreviewCommitted = false;
+  state.virtualPatches[state.activeFilePath] = { status: "editor", patchId: patch.id };
+  setEditorDirty(content !== state.editorOriginalContent);
+  hydrateVirtualPatchMode({ virtual_patch_enabled: false });
+  $("#editorStatus").textContent = "Virtual patch applied to Talos editor. Save File to update Arduino IDE.";
+  $("#codexStatus").textContent = "Virtual patch applied to editor; waiting for Save File.";
+
+  const pending = patch.id && (virtualFile.review_status || "pending") === "pending";
+  if (!pending) return;
+  state.codexApplyingPatchId = patch.id;
+  void api("/api/codex_apply_patch", {
+    method: "POST",
+    body: JSON.stringify({ id: patch.id, path: state.activeFilePath }),
+  }).then(() => refreshCodex()).catch((error) => {
+    $("#codexStatus").textContent = `Editor updated, but patch state could not be synced: ${error.message}`;
+  }).finally(() => {
+    state.codexApplyingPatchId = "";
+  });
+  void api("/api/settings", {
+    method: "POST",
+    body: JSON.stringify({ virtual_patch_enabled: false }),
+  }).catch((error) => {
+    $("#editorStatus").textContent = `Patch applied to editor. Patch mode preference could not be saved: ${error.message}`;
+  });
+}
+
+async function rejectCodexPatch() {
+  const patch = state.codexReviewPatch;
+  if (!patch?.id) return;
+  try {
+    await api("/api/codex_reject_patch", {
+      method: "POST",
+      body: JSON.stringify({ id: patch.id, path: state.activeFilePath }),
+    });
+    if (state.codexPreviewBaseContent) {
+      $("#sourceEditor").value = state.codexPreviewBaseContent;
+      renderEditorLineNumbers();
+    }
+    state.codexPreviewBaseContent = "";
+    state.codexPreviewContent = "";
+    state.codexPreviewCommitted = false;
+    setCodexReviewMode(null);
+    state.virtualPatches[state.activeFilePath] = { status: "rejected", patchId: patch.id };
+    $("#editorStatus").textContent = "Codex patch rejected. The Arduino sketch was not changed.";
+    await refreshCodex();
+  } catch (error) {
+    $("#codexStatus").textContent = `Could not reject Codex patch: ${error.message}`;
+  }
+}
+
+async function toggleVirtualPatchMode() {
+  const enabled = !state.virtualPatchEnabled;
+  try {
+    const result = await api("/api/settings", {
+      method: "POST",
+      body: JSON.stringify({ virtual_patch_enabled: enabled }),
+    });
+    hydrateVirtualPatchMode(result.config || {});
+    refreshCodexReview(state.codexPatches);
+    renderArduinoFilesAfterCodexPatch();
+  } catch (error) {
+    $("#editorStatus").textContent = `Virtual patch setting could not be saved: ${error.message}`;
+  }
+}
+
 function renderStats(payload) {
   const arduino = payload.arduino || {};
   const projects = payload.arduino_projects || [];
@@ -602,10 +923,36 @@ function renderStats(payload) {
     .join("");
 }
 
+function syncVirtualPatches(files = []) {
+  const next = {};
+  files.forEach((file) => {
+    const path = String(file.path || "");
+    if (!path) return;
+    next[path] = state.virtualPatches[path] || { status: "clean" };
+  });
+  state.virtualPatches = next;
+}
+
+function virtualPatchStatus(path) {
+  if (!state.virtualPatchEnabled) return "off";
+  return state.virtualPatches[path]?.status || "clean";
+}
+
 function renderArduino(arduino, force = false, ide = {}) {
   if (!arduino) return;
-  const workspaceChanged = normalizedWindowsPath(arduino.path) !== normalizedWindowsPath(state.selectedWorkspacePath);
+  const nextWorkspacePath = normalizedWindowsPath(arduino.path);
+  const currentWorkspacePath = normalizedWindowsPath(state.selectedWorkspacePath);
+  const transientWorkspaceLoss = (
+    !nextWorkspacePath
+    && currentWorkspacePath
+    && state.activeFilePath
+    && (state.codexBusy || state.codexPreviewStreaming || state.codexPreviewCommitted)
+  );
+  const workspaceChanged = !transientWorkspaceLoss && nextWorkspacePath !== currentWorkspacePath;
   if (workspaceChanged) {
+    if (state.selectedWorkspacePath && state.activeFilePath) {
+      state.activeFileByWorkspace[currentWorkspacePath] = state.activeFilePath;
+    }
     state.selectedWorkspacePath = arduino.path || "";
     resetEditor(arduino.valid ? "Select a source file." : "No valid workspace selected.");
   }
@@ -626,11 +973,13 @@ function renderArduino(arduino, force = false, ide = {}) {
     ? `${arduino.files.length} file(s) | main sketch: ${arduino.main_sketch}`
     : "Set a sketch folder that contains at least one .ino file.";
   $("#verifyArduinoBtn").disabled = state.arduinoVerifyRunning || !arduino.configured;
+  syncVirtualPatches(arduino.files || []);
   $("#arduinoFiles").innerHTML = (arduino.files || []).map((file) => `
     <tr class="${state.codexChangedFiles.has(String(file.path).toLowerCase()) ? "codex-changed" : ""}" data-path="${escapeHtml(file.path)}" tabindex="0">
       <td>
         <span class="file-name">${escapeHtml(file.path)}</span>
         <span class="file-meta">${Number(file.lines || 0)} lines | ${Number(file.bytes || 0)} bytes</span>
+        <span class="virtual-patch-badge ${virtualPatchStatus(file.path)}" data-virtual-path="${escapeHtml(file.path)}">Virtual: ${escapeHtml(virtualPatchStatus(file.path))}</span>
         ${state.codexChangedFiles.has(String(file.path).toLowerCase()) ? '<span class="file-change-badge">Changed by Codex</span>' : ""}
       </td>
     </tr>
@@ -646,6 +995,11 @@ function renderArduino(arduino, force = false, ide = {}) {
     });
   });
   renderActiveFileRow();
+  const rememberedFile = state.activeFileByWorkspace[normalizedWindowsPath(state.selectedWorkspacePath)];
+  const rememberedExists = rememberedFile && (arduino.files || []).some((file) => file.path === rememberedFile);
+  if (!state.activeFilePath && rememberedExists && !state.editorLoading) {
+    window.setTimeout(() => openWorkspaceFile(rememberedFile), 0);
+  }
   renderCodexContext();
 }
 
@@ -671,6 +1025,7 @@ function codexAccountLabel(payload = {}) {
 
 function renderCodex(payload = {}) {
   state.codexBusy = Boolean(payload.busy);
+  previewPendingCodexPatch(payload.pending_patch || {});
   $("#codexAccount").textContent = codexAccountLabel(payload);
   $("#sendCodexBtn").disabled = !payload.ok || state.codexBusy;
   $("#sendCodexBtn").hidden = state.codexBusy;
@@ -695,7 +1050,7 @@ function renderCodex(payload = {}) {
         `).join("");
     const patchHtml = patches.slice(-5).map((patch) => `
       <section class="codex-patch">
-        <div class="codex-patch-head"><span>Applied patch</span><span>${escapeHtml(patch.time || "")}</span></div>
+        <div class="codex-patch-head"><span>${patch.review_status === "pending" ? "Patch ready for review" : `${escapeHtml(patch.review_status || "applied")} patch`}</span><span>${escapeHtml(patch.time || "")}</span></div>
         <div class="codex-patch-list">
           ${(patch.files || []).map((file) => `
             <div class="codex-patch-file">
@@ -735,13 +1090,13 @@ function renderCodex(payload = {}) {
     );
     renderArduinoFilesAfterCodexPatch();
   }
+  refreshCodexReview(patches);
   const nextEventRevision = Number(payload.patch_event_revision || 0);
   if (state.codexPatchEventRevision === null) {
     state.codexPatchEventRevision = nextEventRevision;
   } else if (nextEventRevision !== state.codexPatchEventRevision) {
     state.codexPatchEventRevision = nextEventRevision;
-    const latestPatch = patches.at(-1) || {};
-    syncWorkspaceAfterCodexPatch(latestPatch);
+    $("#codexStatus").textContent = "Codex patch is ready for review.";
   }
 }
 
@@ -803,53 +1158,11 @@ function renderArduinoFilesAfterCodexPatch() {
     const changed = state.codexChangedFiles.has(String(row.dataset.path || "").toLowerCase());
     row.classList.toggle("codex-changed", changed);
   });
-}
-
-async function waitForVerifyIdle() {
-  const deadline = Date.now() + VERIFY_WAIT_TIMEOUT_MS;
-  while (state.arduinoVerifyRunning && Date.now() < deadline) {
-    await new Promise((resolve) => window.setTimeout(resolve, 250));
-  }
-  return !state.arduinoVerifyRunning;
-}
-
-async function syncWorkspaceAfterCodexPatch(patch = {}) {
-  if (state.codexPatchSyncRunning) return;
-  state.codexPatchSyncRunning = true;
-  try {
-    await refresh();
-    if (state.activeFilePath && state.codexChangedFiles.has(state.activeFilePath.toLowerCase())) {
-      if (state.editorDirty) {
-        $("#editorStatus").textContent = "Codex changed this file on disk. Save or reopen it to reconcile changes.";
-      } else {
-        try {
-          const result = await api(`/api/arduino_file?path=${encodeURIComponent(state.activeFilePath)}`);
-          applyEditorFileResult(result, `Reloaded after Codex patch (${Number(result.bytes || 0)} bytes).`);
-        } catch (_error) {
-          resetEditor("The active file was removed by Codex.");
-        }
-      }
-    }
-    const patchWorkspace = normalizedWindowsPath(patch.workspace || "");
-    const selectedWorkspace = normalizedWindowsPath(state.selectedWorkspacePath);
-    if (patchWorkspace && patchWorkspace === selectedWorkspace) {
-      $("#codexStatus").textContent = "Patch applied. Verifying sandbox...";
-      try {
-        if (!await waitForVerifyIdle()) {
-          throw new Error("the previous sandbox verify did not finish");
-        }
-        const result = await verifyArduinoWorkspace("codex_patch");
-        $("#codexStatus").textContent = result.ok
-          ? "Patch applied and sandbox verify passed."
-          : "Patch applied, but sandbox verify failed.";
-      } catch (error) {
-        renderVerifyOutput(null, `Automatic verify failed: ${error.message}`);
-        $("#codexStatus").textContent = "Patch applied, but automatic verify could not run.";
-      }
-    }
-  } finally {
-    state.codexPatchSyncRunning = false;
-  }
+  $$("[data-virtual-path]").forEach((badge) => {
+    const status = virtualPatchStatus(badge.dataset.virtualPath || "");
+    badge.className = `virtual-patch-badge ${status}`;
+    badge.textContent = `Virtual: ${status}`;
+  });
 }
 
 async function refreshCodex() {
@@ -1001,6 +1314,7 @@ function renderArduinoProjects(projects = []) {
 
 function render(payload) {
   hydrateTheme(payload.config || {});
+  hydrateVirtualPatchMode(payload.config || {});
   hydrateAppIdentity(payload.app || {});
   const projects = payload.arduino_projects || [];
   const arduino = payload.arduino || {};
@@ -1179,6 +1493,9 @@ function bindEvents() {
   $("#copyIssuesBtn").addEventListener("click", () => copyText(state.lastIssueText));
   $("#copyVerifyBtn").addEventListener("click", () => copyText(state.lastVerifyText));
   $("#saveFileBtn").addEventListener("click", saveWorkspaceFile);
+  $("#virtualPatchToggleBtn").addEventListener("click", toggleVirtualPatchMode);
+  $("#applyCodexPatchBtn").addEventListener("click", () => applyCodexPatch());
+  $("#rejectCodexPatchBtn").addEventListener("click", rejectCodexPatch);
   $("#toggleCodexBtn").addEventListener("click", () => applyCodexPanel(!codexPanelOpen()));
   $("#closeCodexBtn").addEventListener("click", () => applyCodexPanel(false));
   $("#newCodexThreadBtn").addEventListener("click", newCodexThread);

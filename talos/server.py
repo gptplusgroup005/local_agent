@@ -79,6 +79,7 @@ def state_payload() -> dict[str, Any]:
             "theme": config.get("theme", "light"),
             "arduino_workspace_path": config.get("arduino_workspace_path", ""),
             "arduino_fqbn": config.get("arduino_fqbn", ""),
+            "virtual_patch_enabled": config.get("virtual_patch_enabled", True),
         },
         "arduino": arduino_summary,
         "arduino_ide": arduino_ide_status(
@@ -98,6 +99,8 @@ def state_payload() -> dict[str, Any]:
             "GET /api/codex_status",
             "GET /api/run_history",
             "POST /api/codex_message",
+            "POST /api/codex_apply_patch",
+            "POST /api/codex_reject_patch",
             "POST /api/codex_cancel",
             "POST /api/codex_thread",
             "POST /api/codex_conversation",
@@ -153,6 +156,8 @@ class LocalAgentWebHandler(BaseHTTPRequestHandler):
             for key in ("theme", "arduino_workspace_path", "arduino_fqbn"):
                 if key in payload:
                     config[key] = str(payload[key]).strip()
+            if "virtual_patch_enabled" in payload:
+                config["virtual_patch_enabled"] = bool(payload["virtual_patch_enabled"])
             save_config(config)
             log_event(f"{now()} saved settings")
             self.send_json({"ok": True, "config": load_config()})
@@ -210,6 +215,23 @@ class LocalAgentWebHandler(BaseHTTPRequestHandler):
             )
             if result.get("ok"):
                 log_event(f"{now()} started Codex turn")
+            self.send_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST)
+            return
+        if self.path == "/api/codex_apply_patch":
+            workspace = workspace_summary(load_config())
+            result = CODEX_BRIDGE.apply_patch(
+                str(payload.get("id", "")),
+                str(workspace.get("path") or ""),
+                str(payload.get("path", "")),
+            )
+            if result.get("ok"):
+                log_event(f"{now()} applied Codex patch to Talos editor: {payload.get('path', '')}")
+            self.send_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST)
+            return
+        if self.path == "/api/codex_reject_patch":
+            result = CODEX_BRIDGE.reject_patch(str(payload.get("id", "")), str(payload.get("path", "")))
+            if result.get("ok"):
+                log_event(f"{now()} rejected Codex patch: {payload.get('id', '')}")
             self.send_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST)
             return
         if self.path == "/api/codex_thread":

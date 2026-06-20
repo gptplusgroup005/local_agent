@@ -56,7 +56,7 @@ class TalosArduinoTests(unittest.TestCase):
         self.assertIn("arduino:avr:uno", prompt)
         self.assertIn("void setup()", prompt)
         self.assertIn("ERROR Blink.ino:2:1", prompt)
-        self.assertIn("You may edit relevant files directly", prompt)
+        self.assertIn("Talos staging copy", prompt)
 
     def test_codex_prompt_can_be_read_only(self) -> None:
         prompt = build_codex_prompt("Review only.", allow_edits=False)
@@ -86,21 +86,27 @@ class TalosArduinoTests(unittest.TestCase):
 
     def test_codex_patch_tracking_supports_an_initially_empty_workspace(self) -> None:
         with TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp) / "source"
+            staging = Path(tmp) / "staging"
+            root.mkdir()
+            staging.mkdir()
             bridge = CodexBridge()
             bridge._turn_workspace = str(root)
+            bridge._turn_staging_workspace = str(staging)
             bridge._turn_track_changes = True
-            bridge._turn_snapshot = snapshot_workspace(root)
-            (root / "created.ino").write_text("void setup() {}\n", encoding="utf-8")
+            bridge._turn_snapshot = snapshot_workspace(staging)
+            (staging / "created.ino").write_text("void setup() {}\n", encoding="utf-8")
 
-            with patch("talos.codex_bridge.record_patch"):
-                bridge._finalize_turn_patch()
+            bridge._finalize_turn_patch()
             status = bridge.status(start=False)
 
             self.assertEqual(status["patch_revision"], 1)
             self.assertEqual(status["patch_event_revision"], 1)
             self.assertEqual(status["patches"][0]["files"][0]["path"], "created.ino")
             self.assertEqual(status["patches"][0]["files"][0]["kind"], "add")
+            self.assertEqual(status["patches"][0]["files"][0]["review_status"], "pending")
+            self.assertEqual(status["patches"][0]["review_status"], "pending")
+            self.assertFalse((root / "created.ino").exists())
 
     def test_codex_thread_changes_do_not_emit_patch_events(self) -> None:
         bridge = CodexBridge()
@@ -108,6 +114,29 @@ class TalosArduinoTests(unittest.TestCase):
 
         status = bridge.status(start=False)
         self.assertEqual(status["patch_event_revision"], 0)
+
+    def test_codex_review_patch_moves_one_file_to_editor_without_writing_workspace(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "Sketch.ino"
+            target.write_text("old\n", encoding="utf-8")
+            bridge = CodexBridge()
+            bridge._patches.append(
+                {
+                    "id": "patch-1",
+                    "workspace": str(root),
+                    "review_status": "pending",
+                    "files": [{"path": "Sketch.ino", "kind": "update", "content": "new\n"}],
+                }
+            )
+
+            result = bridge.apply_patch("patch-1", str(root), "Sketch.ino")
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(target.read_text(encoding="utf-8"), "old\n")
+            self.assertEqual(result["file"]["content"], "new\n")
+            self.assertEqual(bridge._patches[0]["files"][0]["review_status"], "editor")
+            self.assertEqual(bridge._patches[0]["review_status"], "editor")
 
     def test_frontend_contains_codex_workbench_panel(self) -> None:
         html = (Path(__file__).parents[1] / "ui" / "web_frontend" / "index.html").read_text(encoding="utf-8")
@@ -119,6 +148,8 @@ class TalosArduinoTests(unittest.TestCase):
         self.assertIn("data-codex-prompt", html)
         self.assertIn('id="codexAllowEdits"', html)
         self.assertIn('id="cancelCodexBtn"', html)
+        self.assertIn('id="virtualPatchToggleBtn"', html)
+        self.assertIn('id="codexDiffPreview"', html)
         self.assertNotIn('id="codexHistoryBtn"', html)
         self.assertIn('id="codexBackBtn"', html)
         self.assertIn('id="codexHistoryCount"', html)
@@ -128,11 +159,27 @@ class TalosArduinoTests(unittest.TestCase):
 
         script = (Path(__file__).parents[1] / "ui" / "web_frontend" / "app.js").read_text(encoding="utf-8")
         self.assertIn("patch_event_revision", script)
-        self.assertIn("Patch applied. Verifying sandbox...", script)
+        self.assertIn("Codex patch is ready for review.", script)
         self.assertIn("formatDuration", script)
         self.assertIn("timings.compile", script)
         self.assertIn("ACTIVE_FILE_POLL_MS", script)
         self.assertIn("checkActiveFileOnDisk", script)
+        self.assertIn("pending_patch", script)
+        self.assertIn("previewPendingCodexPatch", script)
+        self.assertIn("applyUnifiedDiff", script)
+        self.assertIn("Streaming Codex patch", script)
+        self.assertIn("transientWorkspaceLoss", script)
+        self.assertIn("activeFileByWorkspace", script)
+        self.assertIn("applyCodexPatch", script)
+        self.assertIn("rejectCodexPatch", script)
+        self.assertIn("codexDiffPreview", html)
+        self.assertIn("virtualPatchEnabled", script)
+        self.assertIn("toggleVirtualPatchMode", script)
+        self.assertIn("virtualPatchStatus", script)
+        self.assertIn("Virtual patch applied to Talos editor", script)
+        self.assertIn("virtual_patch_enabled: false", script)
+        self.assertIn('streaming ? "Apply Stream"', script)
+        self.assertIn('addEventListener("click", () => applyCodexPatch())', script)
         self.assertIn("selectEditorLine", script)
         self.assertIn("lineFromGutterEvent", script)
         self.assertIn("setInterval(checkActiveFileOnDisk", script)
