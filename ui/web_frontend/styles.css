@@ -1660,24 +1660,6 @@ textarea:focus {
   text-transform: uppercase;
 }
 
-.virtual-patch-badge {
-  width: max-content;
-  color: var(--muted);
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0;
-  text-transform: uppercase;
-}
-
-.virtual-patch-badge.pending {
-  color: #9a6700;
-}
-
-.virtual-patch-badge.off {
-  color: var(--muted);
-  font-weight: 400;
-}
-
 .codex-compose-row .button {
   min-width: 68px;
   min-height: 28px;

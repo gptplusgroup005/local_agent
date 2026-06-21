@@ -224,7 +224,7 @@ def staged_patch_files(
                     fromfile=relative,
                     tofile=relative,
                 )),
-                "review_status": "pending",
+                "review_status": "staged",
                 **({"content": after} if kind != "delete" else {}),
             }
         )
@@ -432,40 +432,82 @@ class CodexBridge:
             patch = next((item for item in self._patches if item.get("id") == patch_id), None)
             if patch is None:
                 return {"ok": False, "error": "Codex patch was not found."}
-            if patch.get("review_status") != "pending":
-                return {"ok": False, "error": "Codex patch is no longer pending review."}
             if Path(str(patch.get("workspace") or "")).resolve() != Path(workspace).resolve():
                 return {"ok": False, "error": "Codex patch belongs to a different workspace."}
             target = str(relative_path or "").replace("\\", "/")
             file = next((item for item in patch.get("files") or [] if item.get("path") == target), None)
             if file is None:
                 return {"ok": False, "error": "Codex patch does not change the selected file."}
-            if file.get("review_status", "pending") != "pending":
-                return {"ok": False, "error": "This file is no longer pending review."}
+            if file.get("review_status", "staged") not in {"staged", "reviewing"}:
+                return {"ok": False, "error": "This Codex change is no longer available for review."}
             if file.get("kind") == "delete":
                 return {"ok": False, "error": "Deleting a file from the editor is not supported yet."}
-            file["review_status"] = "editor"
-            if not any(item.get("review_status", "pending") == "pending" for item in patch.get("files") or []):
-                patch["review_status"] = "editor"
-            self._append_activity(f"Applied Codex virtual patch to Talos editor: {target}.")
+            file["review_status"] = "applied-to-editor"
+            self._sync_patch_status(patch)
+            self._append_activity(f"Applied Codex change to Talos editor: {target}.")
             return {"ok": True, "patch": dict(patch), "file": dict(file)}
+
+    def review_patch(self, patch_id: str, workspace: str, relative_path: str) -> dict[str, Any]:
+        with self._lock:
+            patch = next((item for item in self._patches if item.get("id") == patch_id), None)
+            if patch is None:
+                return {"ok": False, "error": "Codex patch was not found."}
+            if Path(str(patch.get("workspace") or "")).resolve() != Path(workspace).resolve():
+                return {"ok": False, "error": "Codex patch belongs to a different workspace."}
+            target = str(relative_path or "").replace("\\", "/")
+            file = next((item for item in patch.get("files") or [] if item.get("path") == target), None)
+            if file is None:
+                return {"ok": False, "error": "Codex patch does not change the selected file."}
+            if file.get("review_status") == "staged":
+                file["review_status"] = "reviewing"
+                self._sync_patch_status(patch)
+                self._append_activity(f"Reviewing staged Codex change: {target}.")
+            return {"ok": True, "patch": dict(patch), "file": dict(file)}
+
+    def mark_patch_saved(self, workspace: str, relative_path: str) -> dict[str, Any]:
+        with self._lock:
+            target = str(relative_path or "").replace("\\", "/")
+            for patch in reversed(self._patches):
+                if Path(str(patch.get("workspace") or "")).resolve() != Path(workspace).resolve():
+                    continue
+                file = next((item for item in patch.get("files") or [] if item.get("path") == target), None)
+                if file is None or file.get("review_status") != "applied-to-editor":
+                    continue
+                file["review_status"] = "saved"
+                self._sync_patch_status(patch)
+                self._append_activity(f"Saved Codex change to Arduino workspace: {target}.")
+                return {"ok": True, "saved": True, "patch": dict(patch), "file": dict(file)}
+            return {"ok": True, "saved": False}
 
     def reject_patch(self, patch_id: str, relative_path: str) -> dict[str, Any]:
         with self._lock:
             patch = next((item for item in self._patches if item.get("id") == patch_id), None)
             if patch is None:
                 return {"ok": False, "error": "Codex patch was not found."}
-            if patch.get("review_status") != "pending":
-                return {"ok": False, "error": "Codex patch is no longer pending review."}
             target = str(relative_path or "").replace("\\", "/")
             file = next((item for item in patch.get("files") or [] if item.get("path") == target), None)
-            if file is None or file.get("review_status", "pending") != "pending":
+            if file is None or file.get("review_status", "staged") not in {"staged", "reviewing"}:
                 return {"ok": False, "error": "This file is no longer pending review."}
             file["review_status"] = "rejected"
-            if not any(item.get("review_status", "pending") == "pending" for item in patch.get("files") or []):
-                patch["review_status"] = "rejected"
-            self._append_activity(f"Rejected Codex virtual patch: {target}.")
+            self._sync_patch_status(patch)
+            self._append_activity(f"Rejected Codex change: {target}.")
             return {"ok": True, "patch": dict(patch), "file": dict(file)}
+
+    @staticmethod
+    def _sync_patch_status(patch: dict[str, Any]) -> None:
+        statuses = {str(file.get("review_status") or "staged") for file in patch.get("files") or []}
+        if "conflict" in statuses:
+            patch["review_status"] = "conflict"
+        elif statuses & {"staged", "reviewing"}:
+            patch["review_status"] = "reviewing"
+        elif "applied-to-editor" in statuses:
+            patch["review_status"] = "applied-to-editor"
+        elif statuses == {"saved"}:
+            patch["review_status"] = "saved"
+        elif statuses == {"rejected"}:
+            patch["review_status"] = "rejected"
+        else:
+            patch["review_status"] = "staged"
 
     def new_thread(self) -> dict[str, Any]:
         with self._lock:
@@ -862,7 +904,7 @@ class CodexBridge:
                 "files": files,
                 "diff": self._turn_diff,
                 "event_revision": self._patch_event_revision,
-                "review_status": "pending",
+                "review_status": "staged",
             }
             self._patches.append(patch)
             del self._patches[:-20]

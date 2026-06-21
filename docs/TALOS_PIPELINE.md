@@ -2,7 +2,7 @@
 
 ## Final Goal
 
-Talos is a local tool server for Codex. Its job is to let Codex work with IDEs and apps outside VSCode. The first supported target is Arduino IDE: detect open sketches, resolve the real sketch folder, read and edit files, detect board settings, verify code in a sandbox, and support a repeatable debug loop.
+Talos is a local AI control layer for Codex. Its job is to let Codex work safely with IDEs and apps outside VSCode without replacing those tools. The first supported target is Arduino IDE: detect open sketches, resolve the real sketch folder, read and edit files, detect board settings, stage Codex changes, verify code in a sandbox, and support a repeatable debug loop.
 
 The primary UI is an IDE workbench, not a monitoring dashboard. Source editing is the central surface, with project discovery in Explorer, tool output in a lower panel, and future Codex/Arduino/MATLAB integrations arranged around that workspace.
 The global Talos navigation should remain secondary: compact by default, expandable on hover, and pinnable without taking permanent editor space.
@@ -10,19 +10,19 @@ The global Talos navigation should remain secondary: compact by default, expanda
 Short version:
 
 ```text
-Talos = local bridge between Codex and external IDEs/apps, starting with Arduino IDE.
+Talos = local AI control layer between Codex and external IDEs/apps, starting with Arduino IDE.
 ```
 
 ## Current Position
 
 ```text
-Current active stage: Stage 6 - Commercial app packaging
-Next major stage: Release-ready Windows desktop app
+Current active stage: Stage 6 - Change review and embedded workflow
+Next major stage: Safe hunk review, conflict handling, rollback, and staged verification
 ```
 
-Stages 1 through 5 are complete. Talos can detect Arduino sketches and boards, present structured verify results, safely read or edit source files, host a real Codex app-server conversation beside the editor, let Codex patch the selected workspace, verify again in a sandbox, and use native C for speed-sensitive Windows detection.
+Stages 1 through 5 are complete. Talos can detect Arduino sketches and boards, present structured verify results, safely read or edit source files, host a real Codex app-server conversation beside the editor, stage Codex changes outside the original sketch, and use native C for speed-sensitive Windows detection.
 
-The active work is Stage 6: turning the Arduino-ready Talos prototype into a real distributable desktop app with its own product identity, icon, packaging flow, install/uninstall path, and release checklist. MATLAB and other app integrations are paused until the Arduino product path is stable enough to ship.
+The active work is Stage 6: making Talos a reliable AI control layer rather than a second Arduino editor. Codex changes are staged internally, shown in a focused Change Review, applied to the Talos editor only after approval, and written to the original sketch only by Save File. Conflict detection, checkpoint/rollback, and sandbox verification complete the workflow. Commercial packaging resumes only after this workflow is stable. MATLAB and other app integrations remain paused.
 
 ## Arduino MVP Exit Criteria
 
@@ -126,12 +126,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\pipeline_status.ps1
 - [x] Bound Explorer, Editor, Output, and Codex as explicit workbench boxes with clipped overflow.
 - [x] Rebuild the Codex panel as a flexible workbench column without pixel-based pane persistence.
 - [x] Remove the duplicate native build script, no-op worker loop, legacy local chat cache, and obsolete workspace CSS architecture.
-- [x] Re-run verify automatically after a Codex patch in the selected workspace.
+- [x] Keep verify separate from Codex staging so a patch never changes the Arduino sketch before Save File.
 - [x] Keep a short local history of verify attempts and Codex patches.
 - [x] Stream Codex patch previews into the active Talos editor before final disk sync and sandbox verify.
 - [x] Keep the active Talos editor open across Codex patch refreshes and transient workspace snapshots.
 - [x] Stage Codex file changes outside the Arduino sketch, show a color diff, then apply into the Talos editor or reject explicitly; only Save File updates Arduino IDE.
-- [x] Create a virtual patch slot for every Talos workspace file, with a persisted toolbar toggle for manual review or automatic apply.
+- [x] Replace the persistent virtual-patch UI with an internal staging workspace and focused Codex Change Review.
 
 ## Stage 5 - Native C Expansion
 
@@ -144,7 +144,27 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\pipeline_status.ps1
 - [x] Reduce dependence on PowerShell/CIM for hot-path detection when native exports are available.
 - [x] Document the Arduino end-to-end smoke test.
 
-## Stage 6 - Commercial App Packaging
+## Stage 6 - Change Review And Embedded Workflow
+
+- [x] Keep Codex edits inside a Talos staging workspace rather than the Arduino sketch folder.
+- [x] Present each staged Codex file change in a colored Change Review against the Talos editor.
+- [x] Make Apply To Editor update only the Talos editor and require Save File before Arduino IDE receives changes.
+- [x] Remove persistent per-file virtual-patch slots and the Patch On/Off switch; staging remains an internal safety boundary.
+- [x] Track the simple change lifecycle: `staged`, `reviewing`, `applied-to-editor`, `saved`, `rejected`, and reserved `conflict`.
+- [ ] Support hunk-level review: apply, reject, or restore selected diff hunks without accepting an entire file.
+- [ ] Add Apply All and Reject All for a Codex turn while preserving per-file status and ordering.
+- [ ] Detect when Arduino IDE or another editor changes a source file while Talos has a staged Codex change.
+- [ ] Present a three-way conflict view: original base, current Arduino file, and staged Codex change.
+- [ ] Add an explicit conflict-resolution action that never overwrites external changes silently.
+- [ ] Create a lightweight checkpoint before Save File and provide rollback to the last saved Talos checkpoint.
+- [ ] Show a patch timeline with source, files/hunks, editor apply time, save time, verify result, and rollback action.
+- [ ] Verify a staged Codex change in a sandbox before Save File by compiling a temporary merged workspace.
+- [ ] Offer Save And Verify as a deliberate compound action, while retaining separate Save File and Verify Sandbox commands.
+- [ ] Build a compact workspace map for Codex: main sketch, related source tabs, board profile, libraries, and latest diagnostics.
+- [ ] Add per-sketch embedded environment profiles for FQBN, serial port, baud rate, build flags, and library metadata.
+- [ ] Add a manual smoke-test matrix covering staging, hunk apply, conflict, rollback, save, and staged verify.
+
+## Stage 7 - Commercial App Packaging
 
 - [x] Define the commercial app identity: final name, publisher, version format, support URL, and release channel.
 - [ ] Create a dedicated Talos icon set, including `.ico` and source PNG sizes for Windows packaging.
@@ -171,6 +191,14 @@ These are intentionally paused until Arduino is stable and smoke-tested:
 ## Development Principles
 
 - Arduino first, MATLAB later.
+- Talos is an AI control layer, not a replacement for Arduino IDE, VSCode, or PlatformIO.
+- Arduino IDE remains the primary environment for editing, upload, serial monitoring, and board interaction.
+- Codex changes must enter a Talos staging workspace and Change Review before they can enter the Talos editor or the real sketch folder.
+- Apply To Editor updates the Talos editor; Save File is the only normal path that updates the Arduino sketch folder.
+- Every staged change transition must be visible and reversible.
+- Prefer per-file and per-hunk review over whole-workspace replacement.
+- A staged Codex change must detect and resolve external file changes instead of overwriting them silently.
+- Sandbox verify should be able to compile a staged change before it is saved.
 - Unsaved/temp sketches are signals only, not valid workspaces.
 - Verify must run against a sandbox copy, not the original sketch folder.
 - UI must make output/context easy to copy into Codex.
