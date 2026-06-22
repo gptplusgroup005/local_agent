@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import threading
 import time
-from difflib import unified_diff
+from difflib import SequenceMatcher, unified_diff
 from pathlib import Path
 from typing import Any
 
@@ -191,6 +191,48 @@ def prepare_staging_workspace(source_workspace: str | Path) -> Path:
     )
     return staging.resolve()
 
+def build_patch_hunks(before: str, after: str) -> list[dict[str, Any]]:
+    before_lines = before.splitlines()
+    after_lines = after.splitlines()
+    hunks: list[dict[str, Any]] = []
+    matcher = SequenceMatcher(a=before_lines, b=after_lines, autojunk=False)
+    for index, (kind, old_start, old_end, new_start, new_end) in enumerate(matcher.get_opcodes(), start=1):
+        if kind == "equal":
+            continue
+        hunks.append(
+            {
+                "id": f"hunk-{index}",
+                "kind": kind,
+                "old_start": old_start,
+                "old_end": old_end,
+                "new_start": new_start,
+                "new_end": new_end,
+                "old_lines": before_lines[old_start:old_end],
+                "new_lines": after_lines[new_start:new_end],
+                "review_status": "staged",
+            }
+        )
+    return hunks
+
+def content_with_applied_hunks(base_content: str, hunks: list[dict[str, Any]]) -> str:
+    trailing_newline = base_content.endswith("\n")
+    original_lines = base_content.split("\n")
+    if trailing_newline:
+        original_lines.pop()
+    output: list[str] = []
+    cursor = 0
+    for hunk in sorted(hunks, key=lambda item: int(item.get("old_start") or 0)):
+        start = int(hunk.get("old_start") or 0)
+        end = int(hunk.get("old_end") or start)
+        output.extend(original_lines[cursor:start])
+        if hunk.get("review_status") == "applied-to-editor":
+            output.extend(str(line) for line in hunk.get("new_lines") or [])
+        else:
+            output.extend(original_lines[start:end])
+        cursor = end
+    output.extend(original_lines[cursor:])
+    return "\n".join(output) + ("\n" if trailing_newline else "")
+
 def staged_patch_files(
     source_workspace: str | Path,
     staging_workspace: str | Path,
@@ -213,6 +255,7 @@ def staged_patch_files(
         before = source_path.read_text(encoding="utf-8", errors="replace") if source_path.exists() else ""
         after = staging_path.read_text(encoding="utf-8", errors="replace") if staging_path.exists() else ""
         kind = str(change.get("kind") or "update")
+        hunks = build_patch_hunks(before, after)
         files.append(
             {
                 **change,
@@ -225,6 +268,9 @@ def staged_patch_files(
                     tofile=relative,
                 )),
                 "review_status": "staged",
+                "base_content": before,
+                "base_sha256": hashlib.sha256(before.encode("utf-8")).hexdigest(),
+                "hunks": hunks,
                 **({"content": after} if kind != "delete" else {}),
             }
         )
@@ -269,6 +315,7 @@ class CodexBridge:
             self.start_async()
         self._schedule_thread_refresh()
         with self._lock:
+            self._detect_external_conflicts()
             process_running = self._process is not None and self._process.poll() is None
             return {
                 "ok": process_running and self._initialized.is_set() and bool(self._account) and not self._error,
@@ -442,7 +489,12 @@ class CodexBridge:
                 return {"ok": False, "error": "This Codex change is no longer available for review."}
             if file.get("kind") == "delete":
                 return {"ok": False, "error": "Deleting a file from the editor is not supported yet."}
+            for hunk in file.get("hunks") or []:
+                if hunk.get("review_status") in {"staged", "reviewing"}:
+                    hunk["review_status"] = "applied-to-editor"
             file["review_status"] = "applied-to-editor"
+            self._sync_file_status(file)
+            self._refresh_editor_content(file)
             self._sync_patch_status(patch)
             self._append_activity(f"Applied Codex change to Talos editor: {target}.")
             return {"ok": True, "patch": dict(patch), "file": dict(file)}
@@ -460,9 +512,84 @@ class CodexBridge:
                 return {"ok": False, "error": "Codex patch does not change the selected file."}
             if file.get("review_status") == "staged":
                 file["review_status"] = "reviewing"
+                for hunk in file.get("hunks") or []:
+                    if hunk.get("review_status") == "staged":
+                        hunk["review_status"] = "reviewing"
                 self._sync_patch_status(patch)
                 self._append_activity(f"Reviewing staged Codex change: {target}.")
             return {"ok": True, "patch": dict(patch), "file": dict(file)}
+
+    def apply_hunk(self, patch_id: str, workspace: str, relative_path: str, hunk_id: str) -> dict[str, Any]:
+        with self._lock:
+            patch, file, error = self._reviewable_file(patch_id, workspace, relative_path)
+            if error:
+                return {"ok": False, "error": error}
+            hunk = next((item for item in file.get("hunks") or [] if item.get("id") == hunk_id), None)
+            if hunk is None or hunk.get("review_status") not in {"staged", "reviewing"}:
+                return {"ok": False, "error": "This change hunk is no longer available for review."}
+            hunk["review_status"] = "applied-to-editor"
+            self._sync_file_status(file)
+            self._refresh_editor_content(file)
+            self._sync_patch_status(patch)
+            self._append_activity(f"Applied Codex hunk to Talos editor: {relative_path} ({hunk_id}).")
+            return {"ok": True, "patch": dict(patch), "file": dict(file), "hunk": dict(hunk)}
+
+    def reject_hunk(self, patch_id: str, workspace: str, relative_path: str, hunk_id: str) -> dict[str, Any]:
+        with self._lock:
+            patch, file, error = self._reviewable_file(patch_id, workspace, relative_path)
+            if error:
+                return {"ok": False, "error": error}
+            hunk = next((item for item in file.get("hunks") or [] if item.get("id") == hunk_id), None)
+            if hunk is None or hunk.get("review_status") not in {"staged", "reviewing"}:
+                return {"ok": False, "error": "This change hunk is no longer available for review."}
+            hunk["review_status"] = "rejected"
+            self._sync_file_status(file)
+            self._refresh_editor_content(file)
+            self._sync_patch_status(patch)
+            self._append_activity(f"Rejected Codex hunk: {relative_path} ({hunk_id}).")
+            return {"ok": True, "patch": dict(patch), "file": dict(file), "hunk": dict(hunk)}
+
+    def apply_all(self, patch_id: str, workspace: str) -> dict[str, Any]:
+        with self._lock:
+            patch = self._patch_for_workspace(patch_id, workspace)
+            if patch is None:
+                return {"ok": False, "error": "Codex patch was not found for this workspace."}
+            changed = 0
+            for file in patch.get("files") or []:
+                if file.get("kind") == "delete":
+                    continue
+                for hunk in file.get("hunks") or []:
+                    if hunk.get("review_status") in {"staged", "reviewing"}:
+                        hunk["review_status"] = "applied-to-editor"
+                        changed += 1
+                if not file.get("hunks") and file.get("review_status") in {"staged", "reviewing"}:
+                    file["review_status"] = "applied-to-editor"
+                    changed += 1
+                self._sync_file_status(file)
+                self._refresh_editor_content(file)
+            self._sync_patch_status(patch)
+            self._append_activity(f"Applied {changed} Codex change hunk(s) to Talos editors.")
+            return {"ok": True, "patch": dict(patch), "changed": changed}
+
+    def reject_all(self, patch_id: str, workspace: str) -> dict[str, Any]:
+        with self._lock:
+            patch = self._patch_for_workspace(patch_id, workspace)
+            if patch is None:
+                return {"ok": False, "error": "Codex patch was not found for this workspace."}
+            changed = 0
+            for file in patch.get("files") or []:
+                for hunk in file.get("hunks") or []:
+                    if hunk.get("review_status") in {"staged", "reviewing"}:
+                        hunk["review_status"] = "rejected"
+                        changed += 1
+                if not file.get("hunks") and file.get("review_status") in {"staged", "reviewing"}:
+                    file["review_status"] = "rejected"
+                    changed += 1
+                self._sync_file_status(file)
+                self._refresh_editor_content(file)
+            self._sync_patch_status(patch)
+            self._append_activity(f"Rejected {changed} pending Codex change hunk(s).")
+            return {"ok": True, "patch": dict(patch), "changed": changed}
 
     def mark_patch_saved(self, workspace: str, relative_path: str) -> dict[str, Any]:
         with self._lock:
@@ -489,17 +616,99 @@ class CodexBridge:
             if file is None or file.get("review_status", "staged") not in {"staged", "reviewing"}:
                 return {"ok": False, "error": "This file is no longer pending review."}
             file["review_status"] = "rejected"
+            for hunk in file.get("hunks") or []:
+                if hunk.get("review_status") in {"staged", "reviewing"}:
+                    hunk["review_status"] = "rejected"
+            self._sync_file_status(file)
+            self._refresh_editor_content(file)
             self._sync_patch_status(patch)
             self._append_activity(f"Rejected Codex change: {target}.")
             return {"ok": True, "patch": dict(patch), "file": dict(file)}
+
+    def _reviewable_file(
+        self,
+        patch_id: str,
+        workspace: str,
+        relative_path: str,
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, str]:
+        patch = next((item for item in self._patches if item.get("id") == patch_id), None)
+        if patch is None:
+            return None, None, "Codex patch was not found."
+        if Path(str(patch.get("workspace") or "")).resolve() != Path(workspace).resolve():
+            return None, None, "Codex patch belongs to a different workspace."
+        target = str(relative_path or "").replace("\\", "/")
+        file = next((item for item in patch.get("files") or [] if item.get("path") == target), None)
+        if file is None:
+            return None, None, "Codex patch does not change the selected file."
+        return patch, file, ""
+
+    def _patch_for_workspace(self, patch_id: str, workspace: str) -> dict[str, Any] | None:
+        patch = next((item for item in self._patches if item.get("id") == patch_id), None)
+        if patch is None:
+            return None
+        return patch if Path(str(patch.get("workspace") or "")).resolve() == Path(workspace).resolve() else None
+
+    def _detect_external_conflicts(self) -> None:
+        for patch in self._patches:
+            workspace = Path(str(patch.get("workspace") or "")).resolve()
+            for file in patch.get("files") or []:
+                if file.get("review_status") not in {"staged", "reviewing", "applied-to-editor"}:
+                    continue
+                base_hash = str(file.get("base_sha256") or "")
+                if not base_hash:
+                    continue
+                target = (workspace / str(file.get("path") or "")).resolve()
+                try:
+                    target.relative_to(workspace)
+                except ValueError:
+                    continue
+                current = target.read_text(encoding="utf-8", errors="replace") if target.exists() else ""
+                current_hash = hashlib.sha256(current.encode("utf-8")).hexdigest()
+                if current_hash == base_hash:
+                    continue
+                file["review_status"] = "conflict"
+                for hunk in file.get("hunks") or []:
+                    if hunk.get("review_status") in {"staged", "reviewing", "applied-to-editor"}:
+                        hunk["review_status"] = "conflict"
+                file.pop("editor_content", None)
+                self._append_activity(f"External source change requires conflict resolution: {file.get('path', '')}.")
+            self._sync_patch_status(patch)
+
+    @staticmethod
+    def _refresh_editor_content(file: dict[str, Any]) -> None:
+        hunks = file.get("hunks") or []
+        if not hunks:
+            if file.get("review_status") == "applied-to-editor":
+                file["editor_content"] = str(file.get("content") or "")
+            else:
+                file.pop("editor_content", None)
+            return
+        if any(hunk.get("review_status") == "applied-to-editor" for hunk in hunks):
+            file["editor_content"] = content_with_applied_hunks(str(file.get("base_content") or ""), hunks)
+        else:
+            file.pop("editor_content", None)
+
+    @staticmethod
+    def _sync_file_status(file: dict[str, Any]) -> None:
+        statuses = {str(hunk.get("review_status") or "staged") for hunk in file.get("hunks") or []}
+        if not statuses:
+            return
+        if statuses & {"staged", "reviewing"}:
+            file["review_status"] = "reviewing"
+        elif "applied-to-editor" in statuses:
+            file["review_status"] = "applied-to-editor"
+        elif statuses == {"rejected"}:
+            file["review_status"] = "rejected"
 
     @staticmethod
     def _sync_patch_status(patch: dict[str, Any]) -> None:
         statuses = {str(file.get("review_status") or "staged") for file in patch.get("files") or []}
         if "conflict" in statuses:
             patch["review_status"] = "conflict"
-        elif statuses & {"staged", "reviewing"}:
+        elif "reviewing" in statuses or ("staged" in statuses and len(statuses) > 1):
             patch["review_status"] = "reviewing"
+        elif statuses == {"staged"}:
+            patch["review_status"] = "staged"
         elif "applied-to-editor" in statuses:
             patch["review_status"] = "applied-to-editor"
         elif statuses == {"saved"}:

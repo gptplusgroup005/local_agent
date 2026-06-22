@@ -1181,6 +1181,14 @@ textarea:focus {
   padding-right: 10px;
 }
 
+.editor-mode-badge {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
 .editor-actions .icon-button.active {
   color: var(--accent);
   border-color: var(--accent);
@@ -1688,6 +1696,44 @@ textarea:focus {
   display: none;
 }
 
+.codex-diff-hunk {
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.codex-diff-hunk > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 34px;
+  padding: 4px 10px;
+  color: var(--muted);
+  background: var(--canvas-subtle);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.codex-diff-hunk > header > div {
+  display: flex;
+  gap: 6px;
+}
+
+.codex-diff-hunk .button,
+.codex-diff-hunk .icon-button {
+  min-height: 26px;
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
+.codex-diff-hunk.applied-to-editor > header {
+  color: var(--green);
+}
+
+.codex-diff-hunk.rejected > header {
+  color: var(--muted);
+}
+
 .editor-canvas {
   display: grid;
   grid-template-columns: 48px minmax(0, 1fr);
@@ -1727,6 +1773,12 @@ textarea:focus {
 
 .ide-editor-area #sourceEditor:focus {
   box-shadow: none;
+}
+
+.ide-editor-area .source-editor.viewing #sourceEditor:disabled {
+  color: var(--text);
+  background: var(--panel);
+  cursor: default;
 }
 
 .editor-statusbar {

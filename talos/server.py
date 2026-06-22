@@ -100,6 +100,10 @@ def state_payload() -> dict[str, Any]:
             "POST /api/codex_message",
             "POST /api/codex_review_patch",
             "POST /api/codex_apply_patch",
+            "POST /api/codex_apply_hunk",
+            "POST /api/codex_reject_hunk",
+            "POST /api/codex_apply_all",
+            "POST /api/codex_reject_all",
             "POST /api/codex_save_patch",
             "POST /api/codex_reject_patch",
             "POST /api/codex_cancel",
@@ -184,12 +188,15 @@ class LocalAgentWebHandler(BaseHTTPRequestHandler):
             self.send_json(result)
             return
         if self.path == "/api/arduino_file":
+            config = load_config()
             result = write_workspace_file(
-                load_config(),
+                config,
                 str(payload.get("path", "")),
                 str(payload.get("content", "")),
             )
             if result.get("ok"):
+                workspace = workspace_summary(config)
+                CODEX_BRIDGE.mark_patch_saved(str(workspace.get("path") or ""), str(result.get("path") or ""))
                 log_event(f"{now()} wrote Arduino file: {result.get('path')}")
             self.send_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST)
             return
@@ -225,6 +232,36 @@ class LocalAgentWebHandler(BaseHTTPRequestHandler):
             )
             if result.get("ok"):
                 log_event(f"{now()} applied Codex patch to Talos editor: {payload.get('path', '')}")
+            self.send_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST)
+            return
+        if self.path == "/api/codex_apply_hunk":
+            workspace = workspace_summary(load_config())
+            result = CODEX_BRIDGE.apply_hunk(
+                str(payload.get("id", "")),
+                str(workspace.get("path") or ""),
+                str(payload.get("path", "")),
+                str(payload.get("hunk_id", "")),
+            )
+            self.send_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST)
+            return
+        if self.path == "/api/codex_reject_hunk":
+            workspace = workspace_summary(load_config())
+            result = CODEX_BRIDGE.reject_hunk(
+                str(payload.get("id", "")),
+                str(workspace.get("path") or ""),
+                str(payload.get("path", "")),
+                str(payload.get("hunk_id", "")),
+            )
+            self.send_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST)
+            return
+        if self.path == "/api/codex_apply_all":
+            workspace = workspace_summary(load_config())
+            result = CODEX_BRIDGE.apply_all(str(payload.get("id", "")), str(workspace.get("path") or ""))
+            self.send_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST)
+            return
+        if self.path == "/api/codex_reject_all":
+            workspace = workspace_summary(load_config())
+            result = CODEX_BRIDGE.reject_all(str(payload.get("id", "")), str(workspace.get("path") or ""))
             self.send_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST)
             return
         if self.path == "/api/codex_review_patch":

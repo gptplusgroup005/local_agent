@@ -21,6 +21,7 @@ dist/
 config/run_history.json
 tmp*/
 .talos_sandbox/
+.talos_staging/
 *.log
 
 # Local/OS files

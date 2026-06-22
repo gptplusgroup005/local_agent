@@ -142,7 +142,9 @@
                   <span id="editorDirtyBadge" class="editor-dirty-badge" hidden>Unsaved</span>
                 </div>
                 <div class="editor-actions">
+                  <span id="editorModeBadge" class="editor-mode-badge">Review</span>
                   <button id="toggleCodexBtn" class="icon-button active" type="button" title="Toggle Codex panel" aria-label="Toggle Codex panel">Codex</button>
+                  <button id="editInTalosBtn" class="icon-button" type="button" title="Enable local editing in Talos" disabled>Edit in Talos</button>
                   <button id="saveFileBtn" class="icon-button" type="button" disabled>Save File</button>
                   <button id="verifyArduinoBtn" class="button primary">Verify Sandbox</button>
                 </div>
@@ -152,6 +154,8 @@
                 <div id="codexReviewBar" class="codex-review-bar" hidden>
                   <span id="codexReviewLabel">Codex patch ready for review</span>
                   <div class="panel-actions">
+                    <button id="rejectCodexTurnBtn" class="icon-button" type="button">Reject Turn</button>
+                    <button id="applyCodexTurnBtn" class="button" type="button">Apply Turn</button>
                     <button id="rejectCodexPatchBtn" class="icon-button" type="button">Reject</button>
                     <button id="applyCodexPatchBtn" class="button primary" type="button">Apply To Editor</button>
                   </div>
@@ -159,7 +163,7 @@
                 <div id="codexDiffPreview" class="codex-diff-preview" hidden></div>
                 <div class="editor-canvas">
                   <pre id="editorLineNumbers" class="editor-line-numbers" role="button" aria-label="Select source line" title="Click a line number to select that line">1</pre>
-                  <textarea id="sourceEditor" spellcheck="false" disabled placeholder="Select a source file from Explorer to view and edit it."></textarea>
+                  <textarea id="sourceEditor" spellcheck="false" disabled placeholder="Select a source file from Explorer to inspect it."></textarea>
                 </div>
                 <div id="editorStatus" class="editor-statusbar">No file selected.</div>
               </div>

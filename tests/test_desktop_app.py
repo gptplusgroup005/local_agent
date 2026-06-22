@@ -29,11 +29,13 @@ from talos.codex_bridge import (
     CODEX_TURN_TIMEOUT_SECONDS,
     CodexBridge,
     THREAD_SANDBOX_MODE,
+    build_patch_hunks,
     build_codex_prompt,
     diff_workspace_snapshots,
     messages_from_codex_thread,
     normalize_codex_thread,
     snapshot_workspace,
+    staged_patch_files,
 )
 from talos.run_history import record_patch, record_verify, run_history
 from talos.server import state_payload
@@ -149,12 +151,76 @@ class TalosArduinoTests(unittest.TestCase):
             self.assertEqual(bridge._patches[0]["files"][0]["review_status"], "saved")
             self.assertEqual(bridge._patches[0]["review_status"], "saved")
 
+    def test_codex_hunk_review_applies_only_the_selected_hunk(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            before = "first\nkeep\nsecond\n"
+            after = "FIRST\nkeep\nSECOND\n"
+            hunks = build_patch_hunks(before, after)
+            self.assertEqual(len(hunks), 2)
+            bridge = CodexBridge()
+            bridge._patches.append(
+                {
+                    "id": "patch-hunks",
+                    "workspace": str(root),
+                    "review_status": "staged",
+                    "files": [{
+                        "path": "Sketch.ino",
+                        "kind": "update",
+                        "base_content": before,
+                        "content": after,
+                        "review_status": "staged",
+                        "hunks": hunks,
+                    }],
+                }
+            )
+
+            result = bridge.apply_hunk("patch-hunks", str(root), "Sketch.ino", hunks[0]["id"])
+
+            self.assertTrue(result["ok"])
+            statuses = [hunk["review_status"] for hunk in bridge._patches[0]["files"][0]["hunks"]]
+            self.assertEqual(statuses, ["applied-to-editor", "staged"])
+            self.assertEqual(bridge._patches[0]["files"][0]["review_status"], "reviewing")
+
+            applied = bridge.apply_all("patch-hunks", str(root))
+
+            self.assertTrue(applied["ok"])
+            self.assertEqual(applied["changed"], 1)
+            file = bridge._patches[0]["files"][0]
+            self.assertEqual(file["review_status"], "applied-to-editor")
+            self.assertEqual(file["editor_content"], after)
+
+    def test_external_workspace_change_marks_staged_codex_file_as_conflict(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp) / "source"
+            staging = Path(tmp) / "staging"
+            root.mkdir()
+            staging.mkdir()
+            (root / "Sketch.ino").write_text("before\n", encoding="utf-8")
+            (staging / "Sketch.ino").write_text("codex change\n", encoding="utf-8")
+            files = staged_patch_files(root, staging, [{"path": "Sketch.ino", "kind": "update"}])
+            bridge = CodexBridge()
+            bridge._patches.append({
+                "id": "patch-conflict",
+                "workspace": str(root),
+                "review_status": "staged",
+                "files": files,
+            })
+            (root / "Sketch.ino").write_text("external edit\n", encoding="utf-8")
+
+            status = bridge.status(start=False)
+
+            self.assertEqual(status["patches"][0]["files"][0]["review_status"], "conflict")
+            self.assertEqual(status["patches"][0]["review_status"], "conflict")
+
     def test_frontend_contains_codex_workbench_panel(self) -> None:
         html = (Path(__file__).parents[1] / "ui" / "web_frontend" / "index.html").read_text(encoding="utf-8")
 
         self.assertIn('id="codexPanel"', html)
         self.assertIn('id="codexComposer"', html)
         self.assertIn('id="toggleCodexBtn"', html)
+        self.assertIn('id="editInTalosBtn"', html)
+        self.assertIn('id="editorModeBadge"', html)
         self.assertIn('id="editorLineNumbers"', html)
         self.assertIn("data-codex-prompt", html)
         self.assertIn('id="codexAllowEdits"', html)
@@ -183,6 +249,18 @@ class TalosArduinoTests(unittest.TestCase):
         self.assertIn("activeFileByWorkspace", script)
         self.assertIn("applyCodexPatch", script)
         self.assertIn("rejectCodexPatch", script)
+        self.assertIn("reviewCodexHunk", script)
+        self.assertIn("contentWithAppliedHunks", script)
+        self.assertIn("/api/codex_apply_hunk", script)
+        self.assertIn("resolveCodexTurn", script)
+        self.assertIn("/api/codex_apply_all", script)
+        self.assertIn("Codex change conflict detected", script)
+        self.assertIn("Save blocked: this file changed outside Talos", script)
+        self.assertIn('id="applyCodexTurnBtn"', html)
+        self.assertIn("localEditMode", script)
+        self.assertIn("setLocalEditMode", script)
+        self.assertIn("updateEditorAccess", script)
+        self.assertIn("Arduino IDE owns the saved sketch", script)
         self.assertIn("codexDiffPreview", html)
         self.assertNotIn("virtualPatchEnabled", script)
         self.assertNotIn("toggleVirtualPatchMode", script)

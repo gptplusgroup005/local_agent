@@ -63,19 +63,34 @@ talos/server.py         Local HTTP tool server
 talos/client.py         CLI bridge for Codex and terminal use
 talos/core.py           Thin Python bridge config and path utilities
 talos/arduino.py        Arduino workspace and sandbox runner
+talos/codex_bridge.py   Codex staging, change review, and patch lifecycle bridge
 talos/native_bridge.py  ctypes bridge to the native library
+talos/run_history.py    Local verify and change activity history
 native/talos_native.c   Native Windows app-discovery logic
 ui/web_frontend/        Desktop UI assets
 config/config.json      Runtime configuration
+config/app_identity.json Product identity and packaging metadata
 config/requirements.txt Build/runtime Python dependencies
 scripts/build_app.ps1   Build one-file Windows executable
+scripts/build_native.ps1 Build the native Windows helper
+scripts/check.ps1       Rebuild and run the normal verification flow
+scripts/clean_runtime.ps1 Remove disposable sandbox, staging, and test cache data
 scripts/install_app.ps1 Install built app to LocalAppData and create desktop shortcut
 scripts/launch_desktop.ps1 Open source app or installed app
+scripts/pipeline_status.ps1 Show pipeline progress
 tests/                  Regression tests
 docs/                   README and license
 ```
 
-Runtime files such as `.talos_sandbox/` and `config/run_history.json` are ignored by Git.
+Runtime files such as `.talos_sandbox/`, `.talos_staging/`, and `config/run_history.json` are ignored by Git. The sandbox holds disposable compile copies; staging holds disposable Codex change copies. Neither is source code or a workspace backup.
+
+Clean disposable runtime data when Talos is not running:
+
+```powershell
+.\scripts\clean_runtime.ps1
+```
+
+Use `-KeepStaging` only when you need to preserve an in-progress Codex change review.
 
 ## Codex Bridge CLI
 

@@ -4,7 +4,7 @@
 
 Talos is a local AI control layer for Codex. Its job is to let Codex work safely with IDEs and apps outside VSCode without replacing those tools. The first supported target is Arduino IDE: detect open sketches, resolve the real sketch folder, read and edit files, detect board settings, stage Codex changes, verify code in a sandbox, and support a repeatable debug loop.
 
-The primary UI is an IDE workbench, not a monitoring dashboard. Source editing is the central surface, with project discovery in Explorer, tool output in a lower panel, and future Codex/Arduino/MATLAB integrations arranged around that workspace.
+The primary UI is an IDE workbench, not a monitoring dashboard. Change Workspace is the central surface for inspecting files, reviewing Codex changes, and deliberately saving them; project discovery remains in Explorer and tool output in a lower panel.
 The global Talos navigation should remain secondary: compact by default, expandable on hover, and pinnable without taking permanent editor space.
 
 Short version:
@@ -16,13 +16,21 @@ Talos = local AI control layer between Codex and external IDEs/apps, starting wi
 ## Current Position
 
 ```text
-Current active stage: Stage 6 - Change review and embedded workflow
-Next major stage: Safe hunk review, conflict handling, rollback, and staged verification
+Current active stage: Stage 7 - Change safety and staged verification
+Next major stage: Arduino operating workflow and MVP evidence
 ```
 
 Stages 1 through 5 are complete. Talos can detect Arduino sketches and boards, present structured verify results, safely read or edit source files, host a real Codex app-server conversation beside the editor, stage Codex changes outside the original sketch, and use native C for speed-sensitive Windows detection.
 
-The active work is Stage 6: making Talos a reliable AI control layer rather than a second Arduino editor. Codex changes are staged internally, shown in a focused Change Review, applied to the Talos editor only after approval, and written to the original sketch only by Save File. Conflict detection, checkpoint/rollback, and sandbox verification complete the workflow. Commercial packaging resumes only after this workflow is stable. MATLAB and other app integrations remain paused.
+Stage 6 is complete: Change Workspace is now a review-and-control surface rather than a competing Arduino editor. Active work is Stage 7: detect external edits, resolve conflicts explicitly, protect saves with checkpoints, and verify staged changes before the real sketch changes. Stage 8 then completes the Arduino operating workflow and its smoke-test evidence. Commercial packaging begins in Stage 9 only after the Arduino workflow is stable. MATLAB and other app integrations remain paused.
+
+## Delivery Order
+
+1. Stages 0-5 are completed foundations and remain as the technical history of the Arduino MVP.
+2. Stage 6 establishes user ownership and review controls in Change Workspace.
+3. Stage 7 makes the resulting change flow safe against external edits and recoverable on failure.
+4. Stage 8 proves the complete Arduino workflow through context, profiles, and repeatable evidence.
+5. Stage 9 packages only the workflow proven by Stage 8; it does not introduce new Arduino behavior.
 
 ## Arduino MVP Exit Criteria
 
@@ -43,6 +51,8 @@ Talos can be considered Arduino-ready when these are true:
 - Every pipeline-related task must update this file before the task is considered done.
 - When a checklist item is completed, change `[ ]` to `[x]`.
 - When a new requirement appears, add it under the closest matching stage.
+- Do not begin a later stage until the prior stage exit condition is met, except for short research or design work that does not alter the product.
+- Each safety-critical item must include focused automated coverage or a documented manual smoke-test step.
 - Use `scripts/pipeline_status.ps1` to check stage progress from this file.
 
 Command:
@@ -56,6 +66,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\pipeline_status.ps1
 - [x] Keep this pipeline note aligned with current project status.
 - [x] Provide a command-line pipeline progress checker.
 - [x] Require pipeline updates when a pipeline-related task is completed.
+- [x] Keep disposable sandbox, staging, and test-cache artifacts out of version control and provide a safe cleanup command.
 
 ## Stage 1 - Arduino Detection Stability
 
@@ -144,27 +155,49 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\pipeline_status.ps1
 - [x] Reduce dependence on PowerShell/CIM for hot-path detection when native exports are available.
 - [x] Document the Arduino end-to-end smoke test.
 
-## Stage 6 - Change Review And Embedded Workflow
+## Stage 6 - Change Workspace Ownership
+
+Purpose: make Talos the deliberate review/control layer while Arduino IDE remains the primary coding and hardware environment.
 
 - [x] Keep Codex edits inside a Talos staging workspace rather than the Arduino sketch folder.
 - [x] Present each staged Codex file change in a colored Change Review against the Talos editor.
 - [x] Make Apply To Editor update only the Talos editor and require Save File before Arduino IDE receives changes.
 - [x] Remove persistent per-file virtual-patch slots and the Patch On/Off switch; staging remains an internal safety boundary.
 - [x] Track the simple change lifecycle: `staged`, `reviewing`, `applied-to-editor`, `saved`, `rejected`, and reserved `conflict`.
-- [ ] Support hunk-level review: apply, reject, or restore selected diff hunks without accepting an entire file.
-- [ ] Add Apply All and Reject All for a Codex turn while preserving per-file status and ordering.
-- [ ] Detect when Arduino IDE or another editor changes a source file while Talos has a staged Codex change.
+- [x] Define the Talos source surface as a Change Workspace for inspection, diff review, and explicit save control rather than a replacement Arduino editor.
+- [x] Make the Change Workspace read/review-first by default, with an explicit local-edit action and clear Arduino IDE ownership messaging.
+- [x] Support hunk-level review: apply or reject selected diff hunks without accepting an entire file.
+- [x] Add Apply Turn and Reject Turn for a Codex turn while preserving per-file, per-hunk status, and editor drafts.
+
+Exit condition: a user can understand which tool owns the real sketch, review or edit a proposed Codex change intentionally, and send it to Arduino IDE only through Save File.
+
+## Stage 7 - Change Safety And Staged Verification
+
+Purpose: ensure Talos never loses external work or silently overwrites an Arduino sketch while Codex changes are pending.
+
+- [x] Detect when Arduino IDE or another editor changes a source file while Talos has a staged Codex change.
 - [ ] Present a three-way conflict view: original base, current Arduino file, and staged Codex change.
 - [ ] Add an explicit conflict-resolution action that never overwrites external changes silently.
 - [ ] Create a lightweight checkpoint before Save File and provide rollback to the last saved Talos checkpoint.
 - [ ] Show a patch timeline with source, files/hunks, editor apply time, save time, verify result, and rollback action.
 - [ ] Verify a staged Codex change in a sandbox before Save File by compiling a temporary merged workspace.
 - [ ] Offer Save And Verify as a deliberate compound action, while retaining separate Save File and Verify Sandbox commands.
+
+Exit condition: every staged change is either safely saved, rejected, rolled back, or resolved through an explicit conflict decision; it can be verified before touching the real sketch.
+
+## Stage 8 - Arduino Operating Workflow And MVP Evidence
+
+Purpose: turn the safe change loop into a repeatable Arduino workflow with enough context for Codex and enough evidence for release decisions.
+
 - [ ] Build a compact workspace map for Codex: main sketch, related source tabs, board profile, libraries, and latest diagnostics.
 - [ ] Add per-sketch embedded environment profiles for FQBN, serial port, baud rate, build flags, and library metadata.
 - [ ] Add a manual smoke-test matrix covering staging, hunk apply, conflict, rollback, save, and staged verify.
 
-## Stage 7 - Commercial App Packaging
+Exit condition: Talos can repeatedly detect an Arduino sketch, guide a Codex change through review and verification, save it safely, and demonstrate the complete loop in a documented smoke test.
+
+## Stage 9 - Commercial App Packaging
+
+Purpose: convert the proven Arduino workflow into an installable, supportable Beta product.
 
 - [x] Define the commercial app identity: final name, publisher, version format, support URL, and release channel.
 - [ ] Create a dedicated Talos icon set, including `.ico` and source PNG sizes for Windows packaging.
@@ -193,6 +226,7 @@ These are intentionally paused until Arduino is stable and smoke-tested:
 - Arduino first, MATLAB later.
 - Talos is an AI control layer, not a replacement for Arduino IDE, VSCode, or PlatformIO.
 - Arduino IDE remains the primary environment for editing, upload, serial monitoring, and board interaction.
+- Talos Change Workspace is the review and change-control surface: inspect real files, review Codex changes, apply them locally, and save deliberately to Arduino IDE.
 - Codex changes must enter a Talos staging workspace and Change Review before they can enter the Talos editor or the real sketch folder.
 - Apply To Editor updates the Talos editor; Save File is the only normal path that updates the Arduino sketch folder.
 - Every staged change transition must be visible and reversible.

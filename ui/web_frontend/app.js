@@ -17,6 +17,7 @@ const state = {
   editorOriginalContent: "",
   editorFileMtimeNs: 0,
   editorDirty: false,
+  localEditMode: false,
   editorLoading: false,
   editorSaving: false,
   editorDiskChecking: false,
@@ -27,6 +28,7 @@ const state = {
   codexPatchRevision: 0,
   codexPatchEventRevision: null,
   codexChangedFiles: new Set(),
+  conflictedFilePaths: new Set(),
   codexPreviewRevision: 0,
   codexPreviewPath: "",
   codexPreviewStreaming: false,
@@ -442,7 +444,39 @@ function fileListText() {
 function setEditorDirty(dirty) {
   state.editorDirty = Boolean(dirty);
   $("#editorDirtyBadge").hidden = !state.editorDirty;
-  $("#saveFileBtn").disabled = !state.activeFilePath || !state.editorDirty || state.editorSaving;
+  const conflicted = state.conflictedFilePaths.has(state.activeFilePath);
+  $("#saveFileBtn").disabled = !state.activeFilePath || !state.editorDirty || state.editorSaving || conflicted;
+}
+
+function updateEditorAccess() {
+  const editor = $("#sourceEditor");
+  const reviewOpen = $(".source-editor").classList.contains("reviewing");
+  const canEdit = Boolean(state.activeFilePath && state.localEditMode && !reviewOpen);
+  editor.disabled = !canEdit;
+  $(".source-editor").classList.toggle("viewing", Boolean(state.activeFilePath && !canEdit && !reviewOpen));
+  const button = $("#editInTalosBtn");
+  button.disabled = !state.activeFilePath || reviewOpen;
+  button.classList.toggle("active", canEdit);
+  button.textContent = canEdit ? "Stop Editing" : "Edit in Talos";
+  button.title = canEdit
+    ? "Return to review mode; local changes remain until saved or discarded"
+    : "Enable local editing in Talos; Arduino IDE is not updated until Save File";
+  button.setAttribute("aria-pressed", String(canEdit));
+  $("#editorModeBadge").textContent = reviewOpen ? "Reviewing" : canEdit ? "Local edit" : "Review";
+}
+
+function setLocalEditMode(enabled) {
+  if (!state.activeFilePath || $(".source-editor").classList.contains("reviewing")) return;
+  state.localEditMode = Boolean(enabled);
+  updateEditorAccess();
+  if (state.localEditMode) {
+    $("#editorStatus").textContent = "Local edit mode. Save File is required to update Arduino IDE.";
+    $("#sourceEditor").focus();
+  } else if (state.editorDirty) {
+    $("#editorStatus").textContent = "Review mode. Local changes are retained; Save File updates Arduino IDE.";
+  } else {
+    $("#editorStatus").textContent = "Review mode. Arduino IDE owns the saved sketch.";
+  }
 }
 
 function renderEditorLineNumbers() {
@@ -456,6 +490,7 @@ function renderEditorLineNumbers() {
 
 function applyEditorFileResult(result, statusText = "") {
   state.activeFilePath = result.path;
+  state.localEditMode = false;
   if (state.selectedWorkspacePath && result.path) {
     state.activeFileByWorkspace[normalizedWindowsPath(state.selectedWorkspacePath)] = result.path;
   }
@@ -473,13 +508,30 @@ function applyEditorFileResult(result, statusText = "") {
   setCodexReviewMode(null);
   $("#sourceEditor").value = state.editorOriginalContent;
   renderEditorLineNumbers();
-  $("#sourceEditor").disabled = false;
-  $("#editorStatus").textContent = statusText || `${Number(result.bytes || 0)} bytes`;
+  updateEditorAccess();
+  $("#editorStatus").textContent = statusText || `Review mode | ${Number(result.bytes || 0)} bytes | Arduino IDE owns the saved sketch.`;
   setEditorDirty(false);
+}
+
+function applyStoredCodexDraft() {
+  const workspace = normalizedWindowsPath(state.selectedWorkspacePath);
+  const draft = [...state.codexPatches].reverse().flatMap((patch) => (
+    normalizedWindowsPath(patch.workspace || "") === workspace ? patch.files || [] : []
+  )).find((file) => (
+    file.path === state.activeFilePath
+    && file.review_status === "applied-to-editor"
+    && Object.hasOwn(file, "editor_content")
+  ));
+  if (!draft) return;
+  $("#sourceEditor").value = String(draft.editor_content || "");
+  renderEditorLineNumbers();
+  setEditorDirty($("#sourceEditor").value !== state.editorOriginalContent);
+  $("#editorStatus").textContent = "Applied Codex draft. Save File is required to update Arduino IDE.";
 }
 
 function resetEditor(message = "No file selected.") {
   state.activeFilePath = "";
+  state.localEditMode = false;
   state.editorOriginalContent = "";
   state.editorFileMtimeNs = 0;
   state.editorLoading = false;
@@ -498,6 +550,7 @@ function resetEditor(message = "No file selected.") {
   $("#sourceEditor").value = "";
   renderEditorLineNumbers();
   $("#sourceEditor").disabled = true;
+  updateEditorAccess();
   $("#editorStatus").textContent = message;
   setEditorDirty(false);
 }
@@ -514,9 +567,9 @@ async function openWorkspaceFile(path) {
   try {
     const result = await api(`/api/arduino_file?path=${encodeURIComponent(path)}`);
     applyEditorFileResult(result);
+    applyStoredCodexDraft();
     renderActiveFileRow();
     refreshCodexReview(state.codexPatches);
-    $("#sourceEditor").focus();
   } catch (error) {
     $("#editorStatus").textContent = `Open failed: ${error.message}`;
   } finally {
@@ -532,6 +585,10 @@ function renderActiveFileRow() {
 
 async function saveWorkspaceFile() {
   if (!state.activeFilePath || !state.editorDirty || state.editorSaving) return;
+  if (state.conflictedFilePaths.has(state.activeFilePath)) {
+    $("#editorStatus").textContent = "Save blocked: this file changed outside Talos and requires conflict resolution.";
+    return;
+  }
   state.editorSaving = true;
   $("#saveFileBtn").disabled = true;
   $("#editorStatus").textContent = `Saving ${state.activeFilePath}...`;
@@ -543,8 +600,10 @@ async function saveWorkspaceFile() {
     });
     state.editorOriginalContent = content;
     state.editorFileMtimeNs = Number(result.mtime_ns || 0);
+    state.localEditMode = false;
     $("#editorStatus").textContent = `Saved ${result.path} (${Number(result.bytes || 0)} bytes).`;
     setEditorDirty(false);
+    updateEditorAccess();
     void api("/api/codex_save_patch", {
       method: "POST",
       body: JSON.stringify({ path: state.activeFilePath }),
@@ -747,8 +806,56 @@ function selectDiffLine(row) {
   selection.addRange(range);
 }
 
-function renderCodexDiff(editorContent = "", proposedContent = "") {
+function contentWithAppliedHunks(originalContent = "", hunks = []) {
+  const trailingNewline = String(originalContent).endsWith("\n");
+  const originalLines = String(originalContent).split("\n");
+  if (trailingNewline) originalLines.pop();
+  const output = [];
+  let cursor = 0;
+  [...hunks].sort((left, right) => Number(left.old_start || 0) - Number(right.old_start || 0)).forEach((hunk) => {
+    const start = Number(hunk.old_start || 0);
+    const end = Number(hunk.old_end || start);
+    output.push(...originalLines.slice(cursor, start));
+    output.push(...(
+      hunk.review_status === "applied-to-editor"
+        ? (hunk.new_lines || [])
+        : originalLines.slice(start, end)
+    ));
+    cursor = end;
+  });
+  output.push(...originalLines.slice(cursor));
+  return `${output.join("\n")}${trailingNewline ? "\n" : ""}`;
+}
+
+function renderCodexDiff(editorContent = "", proposedContent = "", file = {}) {
   const preview = $("#codexDiffPreview");
+  const hunks = file.hunks || [];
+  if (hunks.length) {
+    preview.innerHTML = hunks.map((hunk, index) => {
+      const status = hunk.review_status || "staged";
+      const reviewable = ["staged", "reviewing"].includes(status);
+      const rows = [
+        ...(hunk.old_lines || []).map((text, line) => ({ kind: "remove", text, line: Number(hunk.old_start || 0) + line + 1 })),
+        ...(hunk.new_lines || []).map((text, line) => ({ kind: "add", text, line: Number(hunk.new_start || 0) + line + 1 })),
+      ];
+      return `
+        <section class="codex-diff-hunk ${escapeHtml(status)}">
+          <header>
+            <span>Hunk ${index + 1} | ${escapeHtml(status)}</span>
+            <div>
+              <button class="icon-button hunk-action" type="button" data-hunk-action="reject" data-hunk-id="${escapeHtml(hunk.id || "")}" ${reviewable ? "" : "disabled"}>Reject hunk</button>
+              <button class="button primary hunk-action" type="button" data-hunk-action="apply" data-hunk-id="${escapeHtml(hunk.id || "")}" ${reviewable ? "" : "disabled"}>Apply hunk</button>
+            </div>
+          </header>
+          ${rows.map((row) => `<button class="codex-diff-line ${row.kind}" type="button"><span class="codex-diff-number">${row.line}</span><span class="codex-diff-content">${escapeHtml(`${row.kind === "add" ? "+" : "-"}${row.text || ""}`)}</span></button>`).join("")}
+        </section>`;
+    }).join("");
+    $$(".hunk-action").forEach((button) => button.addEventListener("click", () => {
+      reviewCodexHunk(button.dataset.hunkAction, button.dataset.hunkId);
+    }));
+    $$(".codex-diff-line").forEach((row) => row.addEventListener("click", () => selectDiffLine(row)));
+    return;
+  }
   preview.innerHTML = codexDiffRows(editorContent, proposedContent).map((row) => {
     const lineNumber = row.newLine || row.oldLine || "";
     const prefix = row.kind === "add" ? "+" : row.kind === "remove" ? "-" : " ";
@@ -775,9 +882,11 @@ function setCodexReviewMode(patch = null) {
   $("#codexDiffPreview").hidden = !reviewing;
   if (!reviewing) {
     $("#codexDiffPreview").innerHTML = "";
+    $("#applyCodexTurnBtn").hidden = true;
+    $("#rejectCodexTurnBtn").hidden = true;
     $("#rejectCodexPatchBtn").hidden = false;
     $("#applyCodexPatchBtn").textContent = "Apply To Editor";
-    if (activeFile) $("#sourceEditor").disabled = false;
+    updateEditorAccess();
     return;
   }
   const reviewable = ["staged", "reviewing"].includes(file.review_status || "staged");
@@ -787,9 +896,13 @@ function setCodexReviewMode(patch = null) {
     : `Codex change review: ${file.path}`;
   $("#applyCodexPatchBtn").textContent = reviewable ? "Apply To Editor" : "Restore Proposed Change";
   $("#applyCodexPatchBtn").disabled = false;
+  $("#applyCodexTurnBtn").hidden = false;
+  $("#rejectCodexTurnBtn").hidden = false;
+  $("#applyCodexTurnBtn").disabled = !reviewable || streaming;
+  $("#rejectCodexTurnBtn").disabled = !reviewable || streaming;
   $("#rejectCodexPatchBtn").hidden = !reviewable || streaming;
-  renderCodexDiff($("#sourceEditor").value, proposedContent);
-  $("#sourceEditor").disabled = true;
+  renderCodexDiff($("#sourceEditor").value, proposedContent, file);
+  updateEditorAccess();
   $("#saveFileBtn").disabled = true;
 }
 
@@ -799,6 +912,21 @@ function refreshCodexReview(patches = []) {
     normalizedWindowsPath(patch.workspace || "") === normalizedWindowsPath(state.selectedWorkspacePath)
   ));
   renderArduinoFilesAfterCodexPatch();
+  state.conflictedFilePaths = new Set(workspacePatches.flatMap((patch) => (
+    (patch.files || [])
+      .filter((file) => file.review_status === "conflict")
+      .map((file) => file.path)
+  )));
+  setEditorDirty(state.editorDirty);
+  const conflict = workspacePatches.find((patch) => (
+    (patch.files || []).some((file) => file.path === state.activeFilePath && file.review_status === "conflict")
+  ));
+  if (conflict) {
+    setCodexReviewMode(null);
+    $("#editorStatus").textContent = "External source change detected. Resolve the Codex conflict before applying or saving this draft.";
+    $("#codexStatus").textContent = "Codex change conflict detected.";
+    return;
+  }
   const pending = workspacePatches.find((patch) => (
     (patch.files || []).some((file) => (
       file.path === state.activeFilePath
@@ -824,7 +952,15 @@ async function applyCodexPatch(patch = state.codexReviewPatch) {
   if (!patch) return;
   const proposedFile = (patch.files || []).find((file) => file.path === state.activeFilePath);
   if (!proposedFile || !Object.hasOwn(proposedFile, "content")) return;
-  const content = String(proposedFile.content || "");
+  const acceptedHunks = (proposedFile.hunks || []).map((hunk) => ({
+    ...hunk,
+    review_status: ["staged", "reviewing"].includes(hunk.review_status || "staged")
+      ? "applied-to-editor"
+      : hunk.review_status,
+  }));
+  const content = acceptedHunks.length
+    ? contentWithAppliedHunks(state.editorOriginalContent, acceptedHunks)
+    : String(proposedFile.content || "");
   setCodexReviewMode(null);
   $("#sourceEditor").value = content;
   renderEditorLineNumbers();
@@ -832,6 +968,8 @@ async function applyCodexPatch(patch = state.codexReviewPatch) {
   state.codexPreviewContent = "";
   state.codexPreviewCommitted = false;
   setEditorDirty(content !== state.editorOriginalContent);
+  state.localEditMode = false;
+  updateEditorAccess();
   $("#editorStatus").textContent = "Codex change applied to Talos editor. Save File to update Arduino IDE.";
   $("#codexStatus").textContent = "Codex change applied to editor; waiting for Save File.";
 
@@ -846,6 +984,61 @@ async function applyCodexPatch(patch = state.codexReviewPatch) {
   }).finally(() => {
     state.codexApplyingPatchId = "";
   });
+}
+
+async function reviewCodexHunk(action, hunkId) {
+  const patch = state.codexReviewPatch;
+  const file = patch && (patch.files || []).find((item) => item.path === state.activeFilePath);
+  if (!patch?.id || !file || !hunkId || !["apply", "reject"].includes(action)) return;
+  const endpoint = action === "apply" ? "/api/codex_apply_hunk" : "/api/codex_reject_hunk";
+  try {
+    const result = await api(endpoint, {
+      method: "POST",
+      body: JSON.stringify({ id: patch.id, path: state.activeFilePath, hunk_id: hunkId }),
+    });
+    const updatedPatch = result.patch || patch;
+    const updatedFile = result.file || file;
+    $("#sourceEditor").value = contentWithAppliedHunks(state.editorOriginalContent, updatedFile.hunks || []);
+    renderEditorLineNumbers();
+    setEditorDirty($("#sourceEditor").value !== state.editorOriginalContent);
+    state.localEditMode = false;
+    setCodexReviewMode(updatedPatch);
+    $("#editorStatus").textContent = action === "apply"
+      ? "Codex hunk applied to Talos editor. Review remaining hunks or Save File when complete."
+      : "Codex hunk rejected. The Arduino sketch was not changed.";
+    await refreshCodex();
+  } catch (error) {
+    $("#codexStatus").textContent = `Could not ${action} Codex hunk: ${error.message}`;
+  }
+}
+
+async function resolveCodexTurn(action) {
+  const patch = state.codexReviewPatch;
+  if (!patch?.id || !["apply", "reject"].includes(action)) return;
+  const endpoint = action === "apply" ? "/api/codex_apply_all" : "/api/codex_reject_all";
+  try {
+    const result = await api(endpoint, {
+      method: "POST",
+      body: JSON.stringify({ id: patch.id }),
+    });
+    const updatedPatch = result.patch || patch;
+    const updatedFile = (updatedPatch.files || []).find((file) => file.path === state.activeFilePath);
+    if (updatedFile?.editor_content !== undefined) {
+      $("#sourceEditor").value = String(updatedFile.editor_content || "");
+    } else if (updatedFile?.review_status === "rejected") {
+      $("#sourceEditor").value = state.editorOriginalContent;
+    }
+    renderEditorLineNumbers();
+    setEditorDirty($("#sourceEditor").value !== state.editorOriginalContent);
+    state.localEditMode = false;
+    setCodexReviewMode(updatedPatch);
+    $("#editorStatus").textContent = action === "apply"
+      ? `Applied ${Number(result.changed || 0)} Codex hunk(s) to Talos drafts. Save File writes the active draft to Arduino IDE.`
+      : `Rejected ${Number(result.changed || 0)} pending Codex hunk(s). The Arduino sketch was not changed.`;
+    await refreshCodex();
+  } catch (error) {
+    $("#codexStatus").textContent = `Could not ${action} this Codex turn: ${error.message}`;
+  }
 }
 
 async function rejectCodexPatch() {
@@ -1442,9 +1635,12 @@ function bindEvents() {
   $("#copyFilesBtn").addEventListener("click", () => copyText(fileListText(), "#arduinoMeta"));
   $("#copyIssuesBtn").addEventListener("click", () => copyText(state.lastIssueText));
   $("#copyVerifyBtn").addEventListener("click", () => copyText(state.lastVerifyText));
+  $("#editInTalosBtn").addEventListener("click", () => setLocalEditMode(!state.localEditMode));
   $("#saveFileBtn").addEventListener("click", saveWorkspaceFile);
   $("#applyCodexPatchBtn").addEventListener("click", () => applyCodexPatch());
   $("#rejectCodexPatchBtn").addEventListener("click", rejectCodexPatch);
+  $("#applyCodexTurnBtn").addEventListener("click", () => resolveCodexTurn("apply"));
+  $("#rejectCodexTurnBtn").addEventListener("click", () => resolveCodexTurn("reject"));
   $("#toggleCodexBtn").addEventListener("click", () => applyCodexPanel(!codexPanelOpen()));
   $("#closeCodexBtn").addEventListener("click", () => applyCodexPanel(false));
   $("#newCodexThreadBtn").addEventListener("click", newCodexThread);
