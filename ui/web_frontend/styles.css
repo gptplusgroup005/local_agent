@@ -4,7 +4,7 @@
   --app-min-height: 460px;
   --rail-collapsed-width: 58px;
   --rail-expanded-width: 232px;
-  --explorer-pane-width: clamp(270px, 18vw, 340px);
+  --explorer-pane-width: clamp(248px, 16vw, 304px);
   --pane-splitter-width: 4px;
   --bg: #ffffff;
   --canvas-subtle: #f6f8fa;
@@ -832,10 +832,10 @@ textarea:focus {
 .ide-workbench {
   display: grid;
   grid-template-columns:
-    minmax(260px, var(--explorer-pane-width))
+    minmax(240px, var(--explorer-pane-width))
     var(--pane-splitter-width)
-    minmax(420px, 1.7fr)
-    minmax(320px, 1fr);
+    minmax(520px, 1.55fr)
+    minmax(352px, 0.95fr);
   width: 100%;
   max-width: none;
   justify-self: stretch;
@@ -850,7 +850,7 @@ textarea:focus {
   grid-template-columns:
     var(--explorer-pane-width)
     var(--pane-splitter-width)
-    minmax(420px, 1fr)
+    minmax(520px, 1fr)
     0;
 }
 
@@ -908,7 +908,7 @@ textarea:focus {
 
 .ide-explorer-section {
   min-width: 0;
-  padding: 10px;
+  padding: 12px;
   border-bottom: 1px solid var(--line);
 }
 
@@ -962,7 +962,7 @@ textarea:focus {
 
 .workspace-context {
   display: grid;
-  gap: 8px;
+  gap: 10px;
 }
 
 .workspace-context label {
@@ -1040,7 +1040,7 @@ textarea:focus {
 
 .ide-editor-area {
   display: grid;
-  grid-template-rows: 38px minmax(260px, 1fr) minmax(190px, 36%);
+  grid-template-rows: 50px minmax(280px, 1fr) minmax(160px, 29%);
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -1048,18 +1048,19 @@ textarea:focus {
 }
 
 .editor-tabbar {
-  padding: 0;
+  gap: 12px;
+  padding: 0 12px;
   background: var(--canvas-subtle);
   text-transform: none;
 }
 
 .codex-review-bar {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  min-height: 38px;
-  padding: 6px 10px;
+  gap: 12px;
+  min-height: 54px;
+  padding: 8px 14px;
   border-bottom: 1px solid var(--line);
   color: var(--text);
   background: var(--accent-subtle);
@@ -1150,9 +1151,9 @@ textarea:focus {
   gap: 8px;
   align-items: center;
   align-self: stretch;
-  min-width: 180px;
-  max-width: 55%;
-  padding: 0 12px;
+  min-width: 160px;
+  max-width: 42%;
+  padding: 0 10px;
   border-right: 1px solid var(--line);
   background: var(--panel);
 }
@@ -1176,17 +1177,63 @@ textarea:focus {
 
 .editor-actions {
   display: flex;
-  gap: 8px;
+  gap: 10px;
   align-items: center;
-  padding-right: 10px;
+  min-width: 0;
+  margin-left: auto;
+}
+
+.editor-mode-controls,
+.editor-command-controls {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+}
+
+.editor-command-controls {
+  padding-left: 10px;
+  border-left: 1px solid var(--line);
 }
 
 .editor-mode-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 7px;
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
   color: var(--muted);
   font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;
   white-space: nowrap;
+}
+
+.codex-review-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.codex-review-copy #codexReviewLabel {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.codex-review-kicker {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.codex-review-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .editor-actions .icon-button.active {
@@ -2326,6 +2373,54 @@ input[type="checkbox"] {
   background: var(--accent-subtle);
 }
 
+@media (max-width: 1240px) {
+  :root {
+    --explorer-pane-width: clamp(220px, 22vw, 268px);
+  }
+
+  .ide-workbench {
+    grid-template-columns:
+      minmax(220px, var(--explorer-pane-width))
+      var(--pane-splitter-width)
+      minmax(420px, 1.4fr)
+      minmax(292px, 0.9fr);
+  }
+
+  .ide-workbench.codex-hidden {
+    grid-template-columns:
+      minmax(220px, var(--explorer-pane-width))
+      var(--pane-splitter-width)
+      minmax(420px, 1fr)
+      0;
+  }
+
+  .editor-actions {
+    gap: 6px;
+  }
+
+  .editor-mode-badge {
+    display: none;
+  }
+
+  .editor-command-controls {
+    padding-left: 6px;
+  }
+
+  .editor-tab {
+    max-width: 36%;
+  }
+
+  .codex-review-bar {
+    grid-template-columns: 1fr;
+    gap: 6px;
+    align-content: center;
+  }
+
+  .codex-review-actions {
+    justify-content: flex-start;
+  }
+}
+
 @media (max-width: 900px) {
   body {
     min-width: 0;
@@ -2443,6 +2538,14 @@ input[type="checkbox"] {
   }
 
   .ide-editor-area {
-    grid-template-rows: 38px minmax(220px, 1fr) minmax(170px, 38%);
+    grid-template-rows: 50px minmax(220px, 1fr) minmax(160px, 32%);
+  }
+
+  .editor-tabbar {
+    overflow-x: auto;
+  }
+
+  .editor-actions {
+    flex: 0 0 auto;
   }
 }

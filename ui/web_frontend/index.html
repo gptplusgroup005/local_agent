@@ -142,18 +142,25 @@
                   <span id="editorDirtyBadge" class="editor-dirty-badge" hidden>Unsaved</span>
                 </div>
                 <div class="editor-actions">
-                  <span id="editorModeBadge" class="editor-mode-badge">Review</span>
-                  <button id="toggleCodexBtn" class="icon-button active" type="button" title="Toggle Codex panel" aria-label="Toggle Codex panel">Codex</button>
-                  <button id="editInTalosBtn" class="icon-button" type="button" title="Enable local editing in Talos" disabled>Edit in Talos</button>
-                  <button id="saveFileBtn" class="icon-button" type="button" disabled>Save File</button>
-                  <button id="verifyArduinoBtn" class="button primary">Verify Sandbox</button>
+                  <div class="editor-mode-controls">
+                    <span id="editorModeBadge" class="editor-mode-badge">Review</span>
+                    <button id="editInTalosBtn" class="icon-button" type="button" title="Enable local editing in Talos" disabled>Edit in Talos</button>
+                  </div>
+                  <div class="editor-command-controls">
+                    <button id="saveFileBtn" class="icon-button" type="button" disabled>Save File</button>
+                    <button id="verifyArduinoBtn" class="button primary">Verify Sandbox</button>
+                    <button id="toggleCodexBtn" class="icon-button active" type="button" title="Toggle Codex panel" aria-label="Toggle Codex panel">Codex</button>
+                  </div>
                 </div>
               </div>
 
               <div class="source-editor">
                 <div id="codexReviewBar" class="codex-review-bar" hidden>
-                  <span id="codexReviewLabel">Codex patch ready for review</span>
-                  <div class="panel-actions">
+                  <div class="codex-review-copy">
+                    <span class="codex-review-kicker">Change review</span>
+                    <span id="codexReviewLabel">Codex patch ready for review</span>
+                  </div>
+                  <div class="panel-actions codex-review-actions">
                     <button id="rejectCodexTurnBtn" class="icon-button" type="button">Reject Turn</button>
                     <button id="applyCodexTurnBtn" class="button" type="button">Apply Turn</button>
                     <button id="rejectCodexPatchBtn" class="icon-button" type="button">Reject</button>

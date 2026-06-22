@@ -166,6 +166,7 @@ Purpose: make Talos the deliberate review/control layer while Arduino IDE remain
 - [x] Track the simple change lifecycle: `staged`, `reviewing`, `applied-to-editor`, `saved`, `rejected`, and reserved `conflict`.
 - [x] Define the Talos source surface as a Change Workspace for inspection, diff review, and explicit save control rather than a replacement Arduino editor.
 - [x] Make the Change Workspace read/review-first by default, with an explicit local-edit action and clear Arduino IDE ownership messaging.
+- [x] Rebalance the IDE workbench so Explorer, Change Workspace, Output, and Codex remain spacious and responsive across desktop widths.
 - [x] Support hunk-level review: apply or reject selected diff hunks without accepting an entire file.
 - [x] Add Apply Turn and Reject Turn for a Codex turn while preserving per-file, per-hunk status, and editor drafts.
 
