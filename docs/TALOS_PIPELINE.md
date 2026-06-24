@@ -209,7 +209,7 @@ Purpose: complete every registered improvement to the Stage 1-7 foundations befo
 - [ ] [Stage 3] Harden Save File with atomic write and file-change debounce so Arduino IDE and Talos do not race during normal editing.
 - [ ] [Stage 4] Add Codex reconnect/retry status for transient app-server failures without replaying a user turn automatically.
 - [ ] [Stage 5] Add a native C benchmark and build/fallback verification to measure detection performance across supported Windows environments.
-- [x] [Stage 6] Use native Windows chrome for standard system resize, drag, minimize, maximize, and restore behavior; move non-primary editor commands into an overflow menu when the toolbar is narrow.
+- [x] [Stage 6] Use native Windows chrome for standard system resize, drag, minimize, maximize, and restore behavior; use the highlighted Explorer file as the active-file signal instead of a redundant editor tab.
 - [ ] [Stage 6] Improve diff/hunk scanning and persist unfinished Change Workspace reviews across Talos restart, with an explicit restore/discard decision.
 - [ ] [Stage 7] Add an explicit manual three-way merge resolution that starts from the current Arduino file and retains Keep Arduino Version as the non-destructive default.
 - [ ] [Stage 7] Add checkpoint retention/cleanup policy and expose a short rollback history without weakening the external-change guard.
@@ -228,7 +228,7 @@ This register is binding rather than advisory. Its rows map to the required Stag
 | Stage 3 - Files | Atomic writes and debounce. | Medium: strengthens file coordination without changing workspace scoping. |
 | Stage 4 - Codex | Reconnect and retry status. | Low: extends resilience without changing Codex ownership rules. |
 | Stage 5 - Native C | Benchmark plus build/fallback checks. | Low: adds measurement and validation around the existing DLL boundary. |
-| Stage 6 - Change Workspace | Native window sizing, responsive command overflow, faster diff scanning, and restart restore/discard. | Medium: restores standard desktop behavior while extending review persistence and keeping Arduino as source owner. |
+| Stage 6 - Change Workspace | Native window sizing, Explorer-based active-file signaling, faster diff scanning, and restart restore/discard. | Medium: restores standard desktop behavior while extending review persistence and keeping Arduino as source owner. |
 | Stage 7 - Safety | Manual three-way merge and checkpoint retention. | High: adds an explicit merge path; it must preserve existing conflict and rollback guards. |
 
 ## Stage 10 - Commercial App Packaging

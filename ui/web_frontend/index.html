@@ -137,10 +137,8 @@
 
             <main class="ide-editor-area">
               <div class="editor-tabbar">
-                <div class="editor-tab active">
-                  <code id="editorFileName">No file open</code>
-                  <span id="editorDirtyBadge" class="editor-dirty-badge" hidden>Unsaved</span>
-                </div>
+                <span id="editorFileName" class="sr-only">No file open</span>
+                <span id="editorDirtyBadge" class="sr-only" hidden>Unsaved</span>
                 <div class="editor-actions">
                   <div class="editor-mode-controls">
                     <span id="editorModeBadge" class="editor-mode-badge">Review</span>
@@ -150,15 +148,6 @@
                     <button id="saveFileBtn" class="icon-button" type="button" disabled>Save File</button>
                     <button id="saveAndVerifyBtn" class="button" type="button" disabled>Save &amp; Verify</button>
                     <button id="rollbackFileBtn" class="icon-button" type="button" title="Restore the file before Talos's last save" disabled>Rollback</button>
-                    <div class="editor-more">
-                      <button id="editorMoreBtn" class="icon-button" type="button" title="More editor commands" aria-label="More editor commands" aria-expanded="false">...</button>
-                      <div id="editorMoreMenu" class="editor-more-menu" hidden>
-                        <button id="editorMoreEditBtn" type="button">Edit in Talos</button>
-                        <button id="editorMoreSaveBtn" type="button">Save File</button>
-                        <button id="editorMoreSaveVerifyBtn" type="button">Save &amp; Verify</button>
-                        <button id="editorMoreRollbackBtn" type="button">Rollback</button>
-                      </div>
-                    </div>
                     <button id="verifyArduinoBtn" class="button primary">Verify Sandbox</button>
                     <button id="toggleCodexBtn" class="icon-button active" type="button" title="Toggle Codex panel" aria-label="Toggle Codex panel">Codex</button>
                   </div>

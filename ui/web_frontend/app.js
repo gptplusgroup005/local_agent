@@ -465,24 +465,6 @@ function setEditorDirty(dirty) {
   $("#saveFileBtn").disabled = !state.activeFilePath || !state.editorDirty || state.editorSaving || conflicted;
   $("#saveAndVerifyBtn").disabled = !state.activeFilePath || !state.editorDirty || state.editorSaving || conflicted;
   $("#rollbackFileBtn").disabled = !state.activeFilePath || !state.lastCheckpoint || state.editorSaving || conflicted;
-  syncEditorMoreMenu();
-}
-
-function syncEditorMoreMenu() {
-  const edit = $("#editorMoreEditBtn");
-  const save = $("#editorMoreSaveBtn");
-  const saveVerify = $("#editorMoreSaveVerifyBtn");
-  const rollback = $("#editorMoreRollbackBtn");
-  if (!edit || !save || !saveVerify || !rollback) return;
-  edit.disabled = $("#editInTalosBtn").disabled;
-  save.disabled = $("#saveFileBtn").disabled;
-  saveVerify.disabled = $("#saveAndVerifyBtn").disabled;
-  rollback.disabled = $("#rollbackFileBtn").disabled;
-}
-
-function closeEditorMoreMenu() {
-  $("#editorMoreMenu").hidden = true;
-  $("#editorMoreBtn").setAttribute("aria-expanded", "false");
 }
 
 function setCheckpoint(checkpoint = null) {
@@ -493,7 +475,6 @@ function setCheckpoint(checkpoint = null) {
   button.title = available
     ? `Restore ${state.activeFilePath} to its state before Talos saved it at ${state.lastCheckpoint.created_at || "the last checkpoint"}`
     : "No safe Talos checkpoint is available for this file";
-  syncEditorMoreMenu();
 }
 
 async function refreshCheckpoint() {
@@ -524,7 +505,6 @@ function updateEditorAccess() {
     : "Enable local editing in Talos; Arduino IDE is not updated until Save File";
   button.setAttribute("aria-pressed", String(canEdit));
   $("#editorModeBadge").textContent = reviewOpen ? "Reviewing" : canEdit ? "Local edit" : "Review";
-  syncEditorMoreMenu();
 }
 
 function setLocalEditMode(enabled) {
@@ -1798,31 +1778,6 @@ function bindEvents() {
   $("#saveFileBtn").addEventListener("click", saveWorkspaceFile);
   $("#saveAndVerifyBtn").addEventListener("click", saveAndVerifyWorkspace);
   $("#rollbackFileBtn").addEventListener("click", rollbackWorkspaceFile);
-  $("#editorMoreBtn").addEventListener("click", () => {
-    const menu = $("#editorMoreMenu");
-    const opening = menu.hidden;
-    menu.hidden = !opening;
-    $("#editorMoreBtn").setAttribute("aria-expanded", String(opening));
-  });
-  $("#editorMoreEditBtn").addEventListener("click", () => {
-    closeEditorMoreMenu();
-    setLocalEditMode(!state.localEditMode);
-  });
-  $("#editorMoreSaveBtn").addEventListener("click", () => {
-    closeEditorMoreMenu();
-    saveWorkspaceFile();
-  });
-  $("#editorMoreSaveVerifyBtn").addEventListener("click", () => {
-    closeEditorMoreMenu();
-    saveAndVerifyWorkspace();
-  });
-  $("#editorMoreRollbackBtn").addEventListener("click", () => {
-    closeEditorMoreMenu();
-    rollbackWorkspaceFile();
-  });
-  document.addEventListener("pointerdown", (event) => {
-    if (!event.target.closest(".editor-more")) closeEditorMoreMenu();
-  });
   $("#applyCodexPatchBtn").addEventListener("click", () => applyCodexPatch());
   $("#verifyCodexPatchBtn").addEventListener("click", verifyCodexPatch);
   $("#rejectCodexPatchBtn").addEventListener("click", rejectCodexPatch);

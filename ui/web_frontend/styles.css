@@ -109,6 +109,18 @@ html {
   overflow: hidden;
 }
 
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 body.native-window .app-chrome {
   display: none;
 }
@@ -788,7 +800,14 @@ textarea:focus {
 }
 
 .workspace-file-list tbody tr.active td {
+  color: var(--accent);
   background: var(--accent-subtle);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.workspace-file-list tbody tr.active .file-name {
+  color: var(--text);
+  font-weight: 700;
 }
 
 .workspace-file-list tbody tr:focus {
@@ -1058,10 +1077,10 @@ textarea:focus {
 
 .editor-tabbar {
   gap: 12px;
+  justify-content: flex-end;
   padding: 0 12px;
   background: var(--canvas-subtle);
   text-transform: none;
-  container-type: inline-size;
 }
 
 .codex-review-bar {
@@ -1155,36 +1174,6 @@ textarea:focus {
   background: #4c1f26;
 }
 
-.editor-tab {
-  position: relative;
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  align-self: stretch;
-  min-width: 160px;
-  max-width: 42%;
-  padding: 0 10px;
-  border-right: 1px solid var(--line);
-  background: var(--panel);
-}
-
-.editor-tab::before {
-  position: absolute;
-  top: 0;
-  right: 0;
-  left: 0;
-  height: 2px;
-  background: var(--accent);
-  content: "";
-}
-
-.editor-tab code {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .editor-actions {
   display: flex;
   gap: 10px;
@@ -1204,88 +1193,6 @@ textarea:focus {
 .editor-command-controls {
   padding-left: 10px;
   border-left: 1px solid var(--line);
-}
-
-.editor-more {
-  position: relative;
-  display: none;
-}
-
-.editor-more-menu {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  z-index: 30;
-  display: grid;
-  width: 168px;
-  padding: 5px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--panel);
-  box-shadow: 0 8px 24px rgba(27, 31, 36, 0.18);
-}
-
-.editor-more-menu[hidden] {
-  display: none;
-}
-
-.editor-more-menu button {
-  min-height: 30px;
-  padding: 4px 8px;
-  border: 0;
-  border-radius: 4px;
-  color: var(--text);
-  background: transparent;
-  font: inherit;
-  font-size: 12px;
-  text-align: left;
-  cursor: pointer;
-}
-
-.editor-more-menu button:hover:not(:disabled) {
-  background: var(--accent-subtle);
-}
-
-.editor-more-menu button:disabled {
-  color: var(--disabled);
-  cursor: not-allowed;
-}
-
-@container (max-width: 800px) {
-  .editor-tabbar {
-    gap: 6px;
-    padding: 0 8px;
-  }
-
-  .editor-tab {
-    flex: 1 1 0;
-    min-width: 0;
-    max-width: none;
-  }
-
-  .editor-mode-controls,
-  .editor-command-controls > #saveFileBtn,
-  .editor-command-controls > #saveAndVerifyBtn,
-  .editor-command-controls > #rollbackFileBtn {
-    display: none;
-  }
-
-  .editor-command-controls {
-    gap: 5px;
-    padding-left: 0;
-    border-left: 0;
-  }
-
-  .editor-more {
-    display: block;
-  }
-
-  .editor-actions .button,
-  .editor-actions .icon-button {
-    min-height: 28px;
-    padding: 3px 8px;
-    white-space: nowrap;
-  }
 }
 
 .editor-mode-badge {
