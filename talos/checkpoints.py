@@ -12,29 +12,23 @@ CHECKPOINT_PATH = ROOT / "config" / "checkpoints.json"
 CHECKPOINT_LIMIT = 80
 CHECKPOINT_LOCK = threading.Lock()
 
-
 def _hash(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
-
 
 def _load() -> list[dict[str, Any]]:
     data = read_json_file(CHECKPOINT_PATH, {})
     checkpoints = data.get("checkpoints") if isinstance(data, dict) else []
     return [item for item in (checkpoints or []) if isinstance(item, dict)][-CHECKPOINT_LIMIT:]
 
-
 def _store(checkpoints: list[dict[str, Any]]) -> None:
     write_json_file(CHECKPOINT_PATH, {"checkpoints": checkpoints[-CHECKPOINT_LIMIT:]})
-
 
 def _public(checkpoint: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in checkpoint.items() if key != "content"}
 
-
 def _workspace_path(config: dict[str, Any]) -> str:
     workspace = configured_workspace(config)
     return str(workspace.resolve()) if workspace is not None else ""
-
 
 def create_before_save_checkpoint(config: dict[str, Any], relative_path: str) -> dict[str, Any]:
     current = read_workspace_file(config, relative_path)
@@ -55,7 +49,6 @@ def create_before_save_checkpoint(config: dict[str, Any], relative_path: str) ->
         _store(checkpoints)
     return {"ok": True, "checkpoint": _public(checkpoint)}
 
-
 def mark_checkpoint_saved(checkpoint_id: str, saved_content: str) -> dict[str, Any]:
     with CHECKPOINT_LOCK:
         checkpoints = _load()
@@ -68,12 +61,10 @@ def mark_checkpoint_saved(checkpoint_id: str, saved_content: str) -> dict[str, A
         _store(checkpoints)
     return {"ok": True, "checkpoint": _public(checkpoint)}
 
-
 def discard_checkpoint(checkpoint_id: str) -> None:
     with CHECKPOINT_LOCK:
         checkpoints = [item for item in _load() if item.get("id") != checkpoint_id]
         _store(checkpoints)
-
 
 def latest_saved_checkpoint(config: dict[str, Any], relative_path: str) -> dict[str, Any]:
     current = read_workspace_file(config, relative_path)
@@ -92,7 +83,6 @@ def latest_saved_checkpoint(config: dict[str, Any], relative_path: str) -> dict[
             None,
         )
     return {"ok": True, "checkpoint": _public(checkpoint) if checkpoint else None}
-
 
 def rollback_last_checkpoint(config: dict[str, Any], relative_path: str) -> dict[str, Any]:
     latest = latest_saved_checkpoint(config, relative_path)

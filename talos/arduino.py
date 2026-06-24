@@ -66,11 +66,9 @@ def resolve_workspace(path_text: str) -> Path | None:
     except OSError:
         return None
 
-
 def workspace_profile_key(path_text: str) -> str:
     workspace = resolve_workspace(path_text)
     return str(workspace).lower() if workspace is not None else ""
-
 
 def normalize_environment_profile(profile: dict[str, Any] | None = None) -> dict[str, Any]:
     profile = profile if isinstance(profile, dict) else {}
@@ -111,14 +109,12 @@ def normalize_environment_profile(profile: dict[str, Any] | None = None) -> dict
         "libraries": library_names[:32],
     }
 
-
 def environment_profile(config: dict[str, Any], workspace_path: str | None = None) -> dict[str, Any]:
     path_text = workspace_path if workspace_path is not None else str(config.get("arduino_workspace_path") or "")
     key = workspace_profile_key(path_text)
     profiles = config.get("arduino_profiles")
     profile = profiles.get(key) if key and isinstance(profiles, dict) else None
     return normalize_environment_profile(profile)
-
 
 def save_environment_profile(config: dict[str, Any], workspace_path: str, profile: dict[str, Any]) -> dict[str, Any]:
     workspace = resolve_workspace(workspace_path)
@@ -130,7 +126,6 @@ def save_environment_profile(config: dict[str, Any], workspace_path: str, profil
     profiles[str(workspace).lower()] = {"path": str(workspace), **normalized}
     config["arduino_profiles"] = profiles
     return {"ok": True, "path": str(workspace), "profile": normalized}
-
 
 def arduino_config(config: dict[str, Any]) -> dict[str, str]:
     workspace_path = str(config.get("arduino_workspace_path", "")).strip()
@@ -769,7 +764,6 @@ def workspace_summary(config: dict[str, Any]) -> dict[str, Any]:
         "files": [file_row(workspace, path) for path in files],
         "message": "Arduino sketch folder ready." if main_sketch else "No .ino file found in this folder.",
     }
-
 
 def workspace_map(config: dict[str, Any], latest_verify: dict[str, Any] | None = None) -> dict[str, Any]:
     """Return compact Arduino workspace metadata suitable for a Codex prompt or UI chip."""

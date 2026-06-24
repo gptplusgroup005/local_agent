@@ -56,7 +56,6 @@ def record_patch(patch: dict[str, Any]) -> dict[str, Any]:
         _store_events(events)
     return event
 
-
 def record_patch_transition(
     patch: dict[str, Any],
     action: str,
@@ -75,7 +74,6 @@ def record_patch_transition(
         event["time"] = entry["time"]
         _store_events(events)
     return event
-
 
 def record_patch_verification(workspace: str, result: dict[str, Any]) -> dict[str, Any] | None:
     with RUN_HISTORY_LOCK:
@@ -99,7 +97,6 @@ def record_patch_verification(workspace: str, result: dict[str, Any]) -> dict[st
         _store_events(events)
     return event
 
-
 def record_rollback(workspace: str, relative_path: str) -> dict[str, Any] | None:
     with RUN_HISTORY_LOCK:
         events = _load_events()
@@ -120,7 +117,6 @@ def record_rollback(workspace: str, relative_path: str) -> dict[str, Any] | None
         _store_events(events)
     return event
 
-
 def _patch_files(patch: dict[str, Any]) -> list[dict[str, Any]]:
     return [
         {
@@ -132,7 +128,6 @@ def _patch_files(patch: dict[str, Any]) -> list[dict[str, Any]]:
         for file in (patch.get("files") or [])
         if isinstance(file, dict)
     ]
-
 
 def _upsert_patch_event(events: list[dict[str, Any]], patch: dict[str, Any]) -> dict[str, Any]:
     patch_id = str(patch.get("id") or "")
@@ -152,14 +147,12 @@ def _upsert_patch_event(events: list[dict[str, Any]], patch: dict[str, Any]) -> 
     event["files"] = _patch_files(patch)
     return event
 
-
 def _store_events(events: list[dict[str, Any]]) -> None:
     write_json_file(RUN_HISTORY_PATH, {"events": events[-RUN_HISTORY_LIMIT:]})
 
 def run_history() -> list[dict[str, Any]]:
     with RUN_HISTORY_LOCK:
         return list(reversed(_load_events()))
-
 
 def latest_verify_for_workspace(workspace: str) -> dict[str, Any] | None:
     target = str(workspace or "")
