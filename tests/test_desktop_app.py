@@ -1,5 +1,6 @@
 import json
 import re
+import time
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -319,6 +320,8 @@ class TalosArduinoTests(unittest.TestCase):
         self.assertIn('id="cancelCodexBtn"', html)
         self.assertNotIn('id="virtualPatchToggleBtn"', html)
         self.assertIn('id="codexDiffPreview"', html)
+        self.assertIn('id="codexContextPreview"', html)
+        self.assertIn('id="codexContextPreviewText"', html)
         self.assertNotIn('id="codexHistoryBtn"', html)
         self.assertIn('id="codexBackBtn"', html)
         self.assertIn('id="codexHistoryCount"', html)
@@ -357,6 +360,8 @@ class TalosArduinoTests(unittest.TestCase):
         self.assertIn("verifyCodexPatch", script)
         self.assertIn("/api/codex_verify_patch", script)
         self.assertIn("keepExternalConflict", script)
+        self.assertIn("buildCodexContextPreview", script)
+        self.assertIn("renderCodexContextPreview", script)
         self.assertIn("/api/codex_keep_external", script)
         self.assertIn('id="codexConflictView"', html)
         self.assertIn('id="keepExternalConflictBtn"', html)
@@ -424,7 +429,14 @@ class TalosArduinoTests(unittest.TestCase):
         self.assertIn("build_native.ps1", check_script)
         self.assertIn("_HAS_NATIVE_WINDOW_ROWS", check_script)
         self.assertIn("_HAS_NATIVE_PROCESS_ROWS", check_script)
+        self.assertIn("benchmark_native.py", check_script)
         self.assertIn("unittest tests.test_desktop_app", check_script)
+
+        benchmark_script = (Path(__file__).parents[1] / "scripts" / "benchmark_native.py").read_text(encoding="utf-8")
+        self.assertIn("list_window_rows", benchmark_script)
+        self.assertIn("list_arduino_process_rows_native", benchmark_script)
+        self.assertIn("fallback_status", benchmark_script)
+        self.assertIn("list_arduino_tool_processes_wmic", benchmark_script)
 
         smoke_test = (Path(__file__).parents[1] / "docs" / "ARDUINO_SMOKE_TEST.md").read_text(encoding="utf-8")
         self.assertIn("Verify Sandbox", smoke_test)
@@ -538,6 +550,33 @@ class TalosArduinoTests(unittest.TestCase):
         start_async.assert_called_once_with()
         self.assertFalse(status["connected"])
         self.assertFalse(status["ok"])
+
+    def test_codex_start_respects_reconnect_cooldown(self) -> None:
+        bridge = CodexBridge()
+        bridge._next_retry_at = time.monotonic() + 60
+
+        with patch("talos.codex_bridge.threading.Thread") as thread:
+            bridge.start_async()
+            bridge.start_async(force=True)
+
+        self.assertEqual(thread.call_count, 1)
+
+    def test_codex_reconnect_does_not_replay_interrupted_turn(self) -> None:
+        bridge = CodexBridge()
+        bridge._turn_running = True
+        bridge._turn_id = "turn-1"
+        bridge._turn_workspace = r"C:\Sketch"
+        bridge._turn_protocol_changes = {"Sketch.ino": {"path": "Sketch.ino"}}
+
+        with patch.object(bridge, "start_async") as start_async:
+            result = bridge.reconnect()
+
+        self.assertTrue(result["ok"])
+        self.assertFalse(bridge._turn_running)
+        self.assertEqual(bridge._turn_id, "")
+        self.assertEqual(bridge._turn_protocol_changes, {})
+        self.assertIn("not replayed", bridge._turn_error)
+        start_async.assert_called_once_with(force=True)
 
     def test_board_mapping_uses_window_plugin_host_process_tree(self) -> None:
         windows = [
@@ -1219,6 +1258,21 @@ class TalosArduinoTests(unittest.TestCase):
             self.assertIsInstance(read_result["mtime_ns"], int)
             self.assertTrue(delete_result["ok"])
             self.assertFalse((root / "Blink.ino").exists())
+
+    def test_arduino_workspace_file_write_is_atomic(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Blink"
+            root.mkdir()
+            target = root / "Blink.ino"
+            target.write_text("before\n", encoding="utf-8")
+            config = {"arduino_workspace_path": str(root), "arduino_fqbn": ""}
+
+            result = write_workspace_file(config, "Blink.ino", "after\n")
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["write"], "atomic")
+            self.assertEqual(target.read_text(encoding="utf-8"), "after\n")
+            self.assertEqual(list(root.glob(".talos-write-*")), [])
 
     def test_arduino_workspace_file_rejects_escape_paths(self) -> None:
         with TemporaryDirectory() as tmp:

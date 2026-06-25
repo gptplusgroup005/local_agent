@@ -1478,15 +1478,15 @@ textarea:focus {
 }
 
 .codex-panel.history-mode {
-  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
   grid-template-areas:
     "head"
+    "context"
     "body"
     "activity"
     "composer";
 }
 
-.codex-panel.history-mode .codex-context,
 .codex-panel.history-mode .codex-messages {
   display: none;
 }
@@ -1682,6 +1682,47 @@ textarea:focus {
   padding: 10px 12px 9px;
   border-top: 1px solid var(--line);
   background: var(--canvas-subtle);
+}
+
+.codex-context-preview {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+}
+
+.codex-context-preview summary {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 28px;
+  padding: 5px 8px;
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.codex-context-preview small {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.codex-context-preview pre {
+  max-height: 118px;
+  margin: 0;
+  padding: 8px;
+  overflow: auto;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font: 10px/1.45 ui-monospace, SFMono-Regular, SFMono, Consolas, monospace;
+  white-space: pre-wrap;
 }
 
 #codexInput {

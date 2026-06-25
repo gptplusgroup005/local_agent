@@ -164,6 +164,7 @@ def state_payload() -> dict[str, Any]:
             "POST /api/arduino_profile",
             "GET /api/codex_status",
             "GET /api/run_history",
+            "POST /api/codex_reconnect",
             "POST /api/codex_message",
             "POST /api/codex_review_patch",
             "POST /api/codex_apply_patch",
@@ -360,6 +361,12 @@ class LocalAgentWebHandler(BaseHTTPRequestHandler):
             )
             if result.get("ok"):
                 log_event(f"{now()} started Codex turn")
+            self.send_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST)
+            return
+        if self.path == "/api/codex_reconnect":
+            result = CODEX_BRIDGE.reconnect()
+            if result.get("ok"):
+                log_event(f"{now()} Codex reconnect requested")
             self.send_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST)
             return
         if self.path == "/api/codex_apply_patch":

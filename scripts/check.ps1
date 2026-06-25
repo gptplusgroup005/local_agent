@@ -27,6 +27,13 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host ""
+Write-Host "== Benchmark native detection =="
+python -B scripts\benchmark_native.py --iterations 3 --max-native-ms 250
+if ($LASTEXITCODE -ne 0) {
+  throw "Native benchmark failed with exit code $LASTEXITCODE"
+}
+
+Write-Host ""
 Write-Host "== Run unit tests =="
 python -B -m unittest tests.test_desktop_app
 if ($LASTEXITCODE -ne 0) {

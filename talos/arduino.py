@@ -670,20 +670,42 @@ def read_workspace_file(config: dict[str, Any], relative_path: str) -> dict[str,
         "mtime_ns": stat.st_mtime_ns,
     }
 
+
+def atomic_write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(f".talos-write-{os.getpid()}-{threading.get_ident()}-{time.time_ns()}{path.suffix}.tmp")
+    try:
+        temp_path.write_text(content, encoding="utf-8", newline="\n")
+        os.replace(temp_path, path)
+    finally:
+        try:
+            if temp_path.exists():
+                temp_path.unlink()
+        except OSError:
+            pass
+
+
 def write_workspace_file(config: dict[str, Any], relative_path: str, content: str) -> dict[str, Any]:
     path, error = resolve_workspace_file(config, relative_path)
     if error or path is None:
         return {"ok": False, "error": error}
     workspace = configured_workspace(config)
     assert workspace is not None
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8", newline="\n")
+    try:
+        atomic_write_text(path, content)
+    except OSError as write_error:
+        return {
+            "ok": False,
+            "error": f"Could not save file atomically. The file may be locked by another app: {write_error}",
+            "path": path.relative_to(workspace).as_posix(),
+        }
     stat = path.stat()
     return {
         "ok": True,
         "path": path.relative_to(workspace).as_posix(),
         "bytes": stat.st_size,
         "mtime_ns": stat.st_mtime_ns,
+        "write": "atomic",
     }
 
 def delete_workspace_file(config: dict[str, Any], relative_path: str) -> dict[str, Any]:

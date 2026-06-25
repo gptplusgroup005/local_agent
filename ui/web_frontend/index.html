@@ -251,6 +251,7 @@
                   </span>
                 </div>
                 <div class="panel-actions">
+                  <button id="reconnectCodexBtn" class="icon-button" type="button" title="Reconnect Codex app-server" hidden>Reconnect</button>
                   <button id="newCodexThreadBtn" class="icon-button" type="button" title="New Codex thread">New</button>
                   <button id="closeCodexBtn" class="icon-button codex-close" type="button" title="Hide Codex panel" aria-label="Hide Codex panel">&times;</button>
                 </div>
@@ -282,6 +283,13 @@
               </div>
               <div id="codexActivity" class="codex-activity" hidden></div>
               <form id="codexComposer" class="codex-composer">
+                <details id="codexContextPreview" class="codex-context-preview">
+                  <summary>
+                    <span>Context preview</span>
+                    <small id="codexContextPreviewStatus">No workspace selected</small>
+                  </summary>
+                  <pre id="codexContextPreviewText"></pre>
+                </details>
                 <textarea id="codexInput" rows="3" placeholder="Ask Codex about this sketch..." aria-label="Message Codex"></textarea>
                 <div class="codex-compose-row">
                   <div class="codex-compose-meta">

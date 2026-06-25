@@ -21,6 +21,7 @@ const state = {
   editorOriginalContent: "",
   editorFileMtimeNs: 0,
   editorDirty: false,
+  editorWriteGuard: null,
   localEditMode: false,
   editorLoading: false,
   editorSaving: false,
@@ -66,6 +67,7 @@ const CODEX_IDLE_REFRESH_MS = 3000;
 const CODEX_HIDDEN_REFRESH_MS = 8000;
 const ACTIVE_FILE_POLL_MS = 700;
 const ARDUINO_EVENT_POLL_MS = 300;
+const TALOS_WRITE_DEBOUNCE_MS = 1500;
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
@@ -609,6 +611,25 @@ function applyEditorFileResult(result, statusText = "") {
   setEditorDirty(false);
 }
 
+function markTalosWrite(path, content, mtimeNs = 0) {
+  state.editorWriteGuard = {
+    path: String(path || ""),
+    content: String(content || ""),
+    mtimeNs: Number(mtimeNs || 0),
+    until: Date.now() + TALOS_WRITE_DEBOUNCE_MS,
+  };
+}
+
+function recentTalosWriteMatches(path) {
+  const guard = state.editorWriteGuard;
+  if (!guard || guard.path !== path) return false;
+  if (Date.now() > guard.until) {
+    state.editorWriteGuard = null;
+    return false;
+  }
+  return true;
+}
+
 function applyStoredCodexDraft() {
   const workspace = normalizedWindowsPath(state.selectedWorkspacePath);
   const draft = [...state.codexPatches].reverse().flatMap((patch) => (
@@ -631,6 +652,7 @@ function resetEditor(message = "No file selected.") {
   state.localEditMode = false;
   state.editorOriginalContent = "";
   state.editorFileMtimeNs = 0;
+  state.editorWriteGuard = null;
   state.editorLoading = false;
   state.editorSaving = false;
   state.editorDiskChecking = false;
@@ -696,6 +718,7 @@ async function saveWorkspaceFile() {
       method: "POST",
       body: JSON.stringify({ path: state.activeFilePath, content }),
     });
+    markTalosWrite(result.path || state.activeFilePath, content, result.mtime_ns);
     state.editorOriginalContent = content;
     state.editorFileMtimeNs = Number(result.mtime_ns || 0);
     state.localEditMode = false;
@@ -737,6 +760,7 @@ async function rollbackWorkspaceFile() {
       body: JSON.stringify({ path: state.activeFilePath }),
     });
     const restored = await api(`/api/arduino_file?path=${encodeURIComponent(state.activeFilePath)}`);
+    markTalosWrite(restored.path || state.activeFilePath, restored.content || "", restored.mtime_ns);
     applyEditorFileResult(restored, "Restored the file from the Talos checkpoint. Arduino IDE now has the restored version.");
     setCheckpoint();
     await refresh();
@@ -785,6 +809,9 @@ async function checkActiveFileOnDisk() {
   ) {
     return;
   }
+  if (recentTalosWriteMatches(state.activeFilePath)) {
+    return;
+  }
   state.editorDiskChecking = true;
   try {
     const result = await api(`/api/arduino_file?path=${encodeURIComponent(state.activeFilePath)}`);
@@ -810,6 +837,7 @@ function setBoardField(fqbn = "", boardName = "") {
   $("#arduinoFqbnInput").value = compactBoardLabel(state.arduinoFqbnFull, state.arduinoBoardName);
   $("#boardInfoPanel").textContent = boardInfoText(state.arduinoFqbnFull, state.arduinoBoardName);
   $("#boardInfoBtn").disabled = !state.arduinoFqbnFull;
+  renderCodexContextPreview();
 }
 
 function normalizedWindowsPath(value = "") {
@@ -1346,6 +1374,7 @@ function renderEnvironmentProfile(profile = {}) {
   $("#profileBuildPropertiesInput").value = (state.environmentProfile.build_flags || []).join("\n");
   $("#profileLibrariesInput").value = (state.environmentProfile.libraries || []).join("\n");
   $("#saveEnvironmentProfileBtn").disabled = !state.selectedWorkspacePath;
+  renderCodexContextPreview();
 }
 
 async function saveEnvironmentProfile() {
@@ -1373,24 +1402,96 @@ function renderCodexContext() {
   const chips = $$("#codexContext span");
   chips[0]?.classList.toggle("ready", Boolean(state.selectedWorkspacePath));
   chips[1]?.classList.toggle("ready", Boolean(state.workspaceMap.valid));
+  chips[0]?.setAttribute("title", state.selectedWorkspacePath || "No workspace selected");
   chips[1]?.setAttribute("title", state.workspaceMap.valid
     ? `${Number(state.workspaceMap.source_tab_count || 0)} source tab(s) | ${state.workspaceMap.main_sketch || "no main sketch"}`
     : "Workspace map unavailable");
   chips[2]?.classList.toggle("ready", Boolean(state.activeFilePath));
+  chips[2]?.setAttribute("title", state.activeFilePath || "No active file selected");
   chips[3]?.classList.toggle(
     "ready",
     Boolean(state.lastIssueText || (state.lastVerifyText && !state.lastVerifyText.startsWith("Sandbox compile"))),
   );
+  chips[3]?.setAttribute("title", codexVerifySummary());
+  renderCodexContextPreview();
+}
+
+function codexVerifySummary() {
+  const text = String(state.lastIssueText || state.lastVerifyText || "").trim();
+  if (!text) return "No verify data";
+  const firstLine = text.split(/\r?\n/).find(Boolean) || text;
+  return firstLine.length > 120 ? `${firstLine.slice(0, 117)}...` : firstLine;
+}
+
+function countEditorLines() {
+  const content = $("#sourceEditor")?.value || "";
+  return content ? content.split(/\r?\n/).length : 0;
+}
+
+function buildCodexContextPreview() {
+  const map = state.workspaceMap || {};
+  const profile = state.environmentProfile || {};
+  const activeFile = state.activeFilePath || "none";
+  const sourceTabs = Number(map.source_tab_count || (map.source_tabs || []).length || 0);
+  const profileParts = [
+    state.arduinoBoardName || $("#arduinoFqbnInput")?.value || map.board?.name || map.fqbn || "board unknown",
+    profile.serial_port ? `port ${profile.serial_port}` : "",
+    profile.baud_rate ? `baud ${profile.baud_rate}` : "",
+    (profile.build_flags || []).length ? `${profile.build_flags.length} build flag(s)` : "",
+  ].filter(Boolean);
+  const lines = [
+    `Workspace: ${state.selectedWorkspacePath || "none"}`,
+    `Workspace map: ${map.valid ? "ready" : "unavailable"} | main ${map.main_sketch || "none"} | ${sourceTabs} source file(s)`,
+    `Active file: ${activeFile}${state.activeFilePath ? ` | ${countEditorLines()} editor line(s)` : ""}`,
+    `Profile: ${profileParts.join(" | ") || "none"}`,
+    `Verify: ${codexVerifySummary()}`,
+    `Edits: ${$("#codexAllowEdits")?.checked ? "allowed" : "read-only"}`,
+  ];
+  return lines.join("\n");
+}
+
+function renderCodexContextPreview() {
+  const preview = $("#codexContextPreviewText");
+  if (!preview) return;
+  const readyParts = [
+    state.selectedWorkspacePath ? "workspace" : "",
+    state.workspaceMap.valid ? "map" : "",
+    state.activeFilePath ? "file" : "",
+    state.lastIssueText || (state.lastVerifyText && !state.lastVerifyText.startsWith("Sandbox compile")) ? "verify" : "",
+  ].filter(Boolean);
+  preview.textContent = buildCodexContextPreview();
+  $("#codexContextPreviewStatus").textContent = readyParts.length
+    ? `${readyParts.length}/4 ready`
+    : "No workspace selected";
 }
 
 function codexAccountLabel(payload = {}) {
   const account = payload.account || {};
+  const connection = payload.connection || {};
   if (!payload.available) return "Codex runtime not found";
   if (payload.initializing) return "Starting local Codex...";
+  if (connection.state === "disconnected") return "Disconnected";
+  if (connection.state === "reconnecting") return "Reconnecting...";
+  if (connection.state === "auth_required") return "Sign-in required";
   if (payload.error && !account.type) return "Sign-in required";
   const plan = account.planType ? ` | ${account.planType}` : "";
   const email = account.email ? `${account.email}${plan}` : `${account.type || "ChatGPT"}${plan}`;
   return payload.connected ? email : "Connecting...";
+}
+
+function codexConnectionStatus(payload = {}) {
+  const connection = payload.connection || {};
+  if (payload.error) {
+    const retryIn = Number(connection.next_retry_in || 0);
+    if (connection.state === "disconnected" && retryIn > 0) {
+      return `${payload.error} Reconnecting in ${retryIn.toFixed(1)}s. The last user turn was not replayed.`;
+    }
+    return payload.error;
+  }
+  if (payload.initializing || connection.state === "connecting" || connection.state === "reconnecting") {
+    return "Connecting to Codex app-server...";
+  }
+  return state.codexBusy ? "Codex is working..." : payload.thread_id ? "Thread ready" : "Ready for a new thread";
 }
 
 function codexChangeStatusLabel(status = "staged") {
@@ -1407,6 +1508,7 @@ function codexChangeStatusLabel(status = "staged") {
 function renderCodex(payload = {}) {
   state.codexBusy = Boolean(payload.busy);
   previewPendingCodexPatch(payload.pending_patch || {});
+  const connection = payload.connection || {};
   $("#codexAccount").textContent = codexAccountLabel(payload);
   $("#sendCodexBtn").disabled = !payload.ok || state.codexBusy;
   $("#sendCodexBtn").hidden = state.codexBusy;
@@ -1414,8 +1516,9 @@ function renderCodex(payload = {}) {
   $("#cancelCodexBtn").disabled = !state.codexBusy;
   $("#codexInput").disabled = !payload.ok;
   $("#newCodexThreadBtn").disabled = state.codexBusy;
-  $("#codexStatus").textContent = payload.error
-    || (state.codexBusy ? "Codex is working..." : payload.thread_id ? "Thread ready" : "Ready for a new thread");
+  $("#reconnectCodexBtn").hidden = payload.connected && !payload.error;
+  $("#reconnectCodexBtn").disabled = state.codexBusy || payload.initializing || connection.state === "connecting";
+  $("#codexStatus").textContent = codexConnectionStatus(payload);
   const messages = payload.messages || [];
   const patches = payload.patches || [];
   const conversations = payload.conversations || [];
@@ -1571,6 +1674,7 @@ async function sendCodexMessage() {
   const input = $("#codexInput");
   const message = input.value.trim();
   if (!message || state.codexBusy) return;
+  renderCodexContextPreview();
   $("#codexStatus").textContent = "Sending context to Codex...";
   $("#sendCodexBtn").disabled = true;
   showCodexTasks(false);
@@ -1643,6 +1747,18 @@ async function cancelCodexTurn() {
   } catch (error) {
     $("#codexStatus").textContent = error.message;
     $("#cancelCodexBtn").disabled = false;
+  }
+}
+
+async function reconnectCodex() {
+  $("#reconnectCodexBtn").disabled = true;
+  $("#codexStatus").textContent = "Reconnecting Codex app-server...";
+  try {
+    await api("/api/codex_reconnect", { method: "POST", body: "{}" });
+    await refreshCodex();
+  } catch (error) {
+    $("#codexStatus").textContent = error.message;
+    $("#reconnectCodexBtn").disabled = false;
   }
 }
 
@@ -1928,6 +2044,7 @@ function bindEvents() {
   $("#keepExternalConflictBtn").addEventListener("click", keepExternalConflict);
   $("#toggleCodexBtn").addEventListener("click", () => applyCodexPanel(!codexPanelOpen()));
   $("#closeCodexBtn").addEventListener("click", () => applyCodexPanel(false));
+  $("#reconnectCodexBtn").addEventListener("click", reconnectCodex);
   $("#newCodexThreadBtn").addEventListener("click", newCodexThread);
   $("#codexBackBtn").addEventListener("click", () => showCodexTasks(true));
   $("#cancelCodexBtn").addEventListener("click", cancelCodexTurn);
@@ -1941,10 +2058,12 @@ function bindEvents() {
       sendCodexMessage();
     }
   });
+  $("#codexAllowEdits").addEventListener("change", renderCodexContextPreview);
   $("#sourceEditor").addEventListener("input", () => {
     renderEditorLineNumbers();
     setEditorDirty($("#sourceEditor").value !== state.editorOriginalContent);
     $("#editorStatus").textContent = state.editorDirty ? "Unsaved changes." : "No changes.";
+    renderCodexContextPreview();
   });
   $("#sourceEditor").addEventListener("keydown", (event) => {
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {

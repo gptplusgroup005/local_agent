@@ -21,6 +21,7 @@ STAGING_ROOT = ROOT / ".talos_staging"
 THREAD_SANDBOX_MODE = "workspace-write"
 CODEX_TURN_TIMEOUT_SECONDS = 300
 CODEX_THREAD_REFRESH_SECONDS = 15
+CODEX_RECONNECT_DELAYS_SECONDS = (1, 2, 5, 10, 30)
 
 def _clean_thread_text(text: str) -> str:
     value = str(text or "").strip()
@@ -343,6 +344,10 @@ class CodexBridge:
         self._remote_threads: list[dict[str, Any]] = []
         self._remote_threads_updated_at = 0.0
         self._remote_threads_loading = False
+        self._connection_state = "idle"
+        self._retry_count = 0
+        self._next_retry_at = 0.0
+        self._last_disconnect = ""
 
     def status(self, start: bool = True) -> dict[str, Any]:
         if start:
@@ -351,11 +356,19 @@ class CodexBridge:
         with self._lock:
             self._detect_external_conflicts()
             process_running = self._process is not None and self._process.poll() is None
+            retry_in = max(0.0, self._next_retry_at - time.monotonic())
             return {
                 "ok": process_running and self._initialized.is_set() and bool(self._account) and not self._error,
                 "available": bool(find_codex_executable()),
                 "connected": process_running,
                 "initializing": self._starting,
+                "connection": {
+                    "state": self._connection_state,
+                    "retry_count": self._retry_count,
+                    "next_retry_in": round(retry_in, 1),
+                    "last_disconnect": self._last_disconnect,
+                    "can_retry_now": retry_in <= 0 and not self._starting,
+                },
                 "busy": self._turn_running,
                 "thread_id": self._thread_id,
                 "thread_cwd": self._thread_cwd,
@@ -375,16 +388,43 @@ class CodexBridge:
                 "conversations": self._thread_summaries(),
             }
 
-    def start_async(self) -> None:
+    def start_async(self, force: bool = False) -> None:
         with self._lock:
             process_running = self._process is not None and self._process.poll() is None
             if self._initialized.is_set() and process_running:
                 return
             if self._starting:
                 return
+            if not force and self._next_retry_at and time.monotonic() < self._next_retry_at:
+                return
             self._starting = True
+            self._connection_state = "connecting"
             self._error = ""
         threading.Thread(target=self._start_worker, daemon=True).start()
+
+    def reconnect(self) -> dict[str, Any]:
+        with self._lock:
+            if self._turn_running:
+                self._turn_running = False
+                self._turn_id = ""
+                self._turn_error = "Codex reconnect requested. The interrupted user turn was not replayed."
+                self._clear_turn_patch_state()
+            process = self._process
+            self._process = None
+            pending = list(self._pending.values())
+            self._pending.clear()
+            self._initialized.clear()
+            self._starting = False
+            self._retry_count = 0
+            self._next_retry_at = 0.0
+            self._connection_state = "reconnecting"
+            self._append_activity("Manual Codex reconnect requested.")
+        if process is not None and process.poll() is None:
+            process.terminate()
+        for response_queue in pending:
+            response_queue.put({"error": {"message": "Codex reconnect requested."}})
+        self.start_async(force=True)
+        return {"ok": True, "status": "reconnecting"}
 
     def ensure_started(self, timeout: float = 20) -> None:
         self.start_async()
@@ -416,6 +456,12 @@ class CodexBridge:
                 self._account = account_result.get("account")
                 if account_result.get("requiresOpenaiAuth") and not self._account:
                     self._error = "Codex is not signed in. Sign in through the Codex extension or CLI first."
+                    self._connection_state = "auth_required"
+                else:
+                    self._connection_state = "connected"
+                    self._retry_count = 0
+                    self._next_retry_at = 0.0
+                    self._last_disconnect = ""
                 self._append_activity("Codex app-server connected.")
             try:
                 self._refresh_threads()
@@ -424,7 +470,7 @@ class CodexBridge:
                     self._append_activity(f"Codex history refresh warning: {error}")
         except Exception as error:
             with self._lock:
-                self._error = str(error)
+                self._record_connection_failure(str(error))
                 self._append_activity(f"Codex startup failed: {error}")
         finally:
             with self._lock:
@@ -439,6 +485,7 @@ class CodexBridge:
             if not executable:
                 raise RuntimeError("Codex CLI was not found. Install or enable the OpenAI Codex extension.")
             self._error = ""
+            self._connection_state = "connecting"
             self._initialized.clear()
             self._process = subprocess.Popen(
                 [executable, "app-server", "--stdio"],
@@ -949,6 +996,14 @@ class CodexBridge:
                 self._append_activity(reason)
         return {"ok": True}
 
+    def _record_connection_failure(self, message: str) -> None:
+        self._error = message
+        self._connection_state = "disconnected"
+        self._last_disconnect = message
+        delay = CODEX_RECONNECT_DELAYS_SECONDS[min(self._retry_count, len(CODEX_RECONNECT_DELAYS_SECONDS) - 1)]
+        self._retry_count += 1
+        self._next_retry_at = time.monotonic() + delay
+
     def _watch_turn_timeout(self, thread_id: str, turn_id: str) -> None:
         threading.Event().wait(CODEX_TURN_TIMEOUT_SECONDS)
         with self._lock:
@@ -1012,8 +1067,13 @@ class CodexBridge:
             self._handle_notification(message)
         with self._lock:
             if self._process is process and process.poll() is not None:
-                self._error = f"Codex app-server exited with code {process.returncode}."
+                message = f"Codex app-server exited with code {process.returncode}."
+                self._record_connection_failure(message)
+                if self._turn_running:
+                    self._turn_error = "Codex app-server disconnected. The interrupted user turn was not replayed."
                 self._turn_running = False
+                self._turn_id = ""
+                self._clear_turn_patch_state()
                 pending = list(self._pending.values())
                 self._pending.clear()
             else:
