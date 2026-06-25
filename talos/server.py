@@ -20,6 +20,8 @@ from talos.core import (
 )
 from talos.arduino import (
     arduino_ide_status,
+    cancel_arduino_compile,
+    clear_arduino_compile_cache,
     delete_workspace_file,
     discover_arduino_projects,
     environment_profile,
@@ -157,6 +159,8 @@ def state_payload() -> dict[str, Any]:
             "POST /api/arduino_rollback",
             "POST /api/arduino_delete",
             "POST /api/arduino_verify",
+            "POST /api/arduino_verify_cancel",
+            "POST /api/arduino_verify_cache_clear",
             "POST /api/arduino_profile",
             "GET /api/codex_status",
             "GET /api/run_history",
@@ -286,6 +290,17 @@ class LocalAgentWebHandler(BaseHTTPRequestHandler):
             status = "passed" if result.get("ok") else result.get("status", "failed")
             log_event(f"{now()} Arduino verify {status}")
             self.send_json(result)
+            return
+        if self.path == "/api/arduino_verify_cancel":
+            result = cancel_arduino_compile()
+            if result.get("ok"):
+                log_event(f"{now()} Arduino verify cancellation requested")
+            self.send_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.CONFLICT)
+            return
+        if self.path == "/api/arduino_verify_cache_clear":
+            cleared = clear_arduino_compile_cache()
+            log_event(f"{now()} cleared Arduino compile cache ({cleared} entries)")
+            self.send_json({"ok": True, "cleared": cleared})
             return
         if self.path == "/api/arduino_file":
             config = load_config()

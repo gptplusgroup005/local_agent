@@ -324,13 +324,14 @@ function verifySummaryHtml(result = {}) {
   const libraries = result.libraries || [];
   const platforms = result.platforms || [];
   const issues = result.issues || [];
+  const cache = result.cache || {};
   const timingRows = [
     ["Prepare", timings.prepare],
     ["Sandbox copy", timings.sandbox_copy],
     ["Compile", timings.compile],
     ["Total", timings.total],
   ].filter(([, value]) => Number.isFinite(Number(value)));
-  if (!rows.length && !timingRows.length && !libraries.length && !platforms.length && !issues.length) return "";
+  if (!rows.length && !timingRows.length && !libraries.length && !platforms.length && !issues.length && !cache.hit) return "";
   return `
     <div class="verify-summary">
       ${rows.map(([label, value]) => `<div><span>${escapeHtml(label)}</span><b>${escapeHtml(value)}</b></div>`).join("")}
@@ -338,6 +339,7 @@ function verifySummaryHtml(result = {}) {
       ${libraries.length ? `<div><span>Libraries</span><b>${escapeHtml(libraries.map((item) => `${item.name} ${item.version}`.trim()).join(", "))}</b></div>` : ""}
       ${platforms.length ? `<div><span>Platform</span><b>${escapeHtml(platforms.map((item) => `${item.name} ${item.version}`.trim()).join(", "))}</b></div>` : ""}
       ${issues.length ? `<div><span>Issues</span><b>${escapeHtml(String(issues.length))}</b></div>` : ""}
+      ${cache.hit ? `<div><span>Cache</span><b>Reused result (${escapeHtml(formatDuration(cache.age_seconds))} old)</b></div>` : ""}
     </div>
   `;
 }
@@ -401,6 +403,7 @@ function renderVerifyOutput(result = null, pendingText = "") {
     <div class="verify-head">
       <span class="verify-badge">${escapeHtml(status)}</span>
       <span class="verify-command-name">${escapeHtml(commandBaseName(command) || "arduino-cli")}</span>
+      ${result.cache?.hit ? '<span class="verify-command-name">cached</span>' : ""}
     </div>
     ${command ? `<div class="verify-field"><span>Command</span><code>${escapeHtml(command)}</code></div>` : ""}
     ${sandbox ? `<div class="verify-field"><span>Sandbox</span><code>${escapeHtml(sandbox)}</code></div>` : ""}
@@ -1153,6 +1156,7 @@ async function verifyCodexPatch() {
   const patch = state.codexReviewPatch;
   if (!patch?.id || state.codexPatchVerifyRunning) return;
   state.codexPatchVerifyRunning = true;
+  setArduinoVerifyRunning(true);
   $("#verifyCodexPatchBtn").disabled = true;
   setOutputView("verify");
   renderVerifyOutput(null, "Compiling the staged Codex change in an isolated Arduino sandbox...");
@@ -1171,6 +1175,7 @@ async function verifyCodexPatch() {
     $("#codexStatus").textContent = `Could not verify staged Codex change: ${error.message}`;
   } finally {
     state.codexPatchVerifyRunning = false;
+    setArduinoVerifyRunning(false);
     if (state.codexReviewPatch?.id === patch.id) $("#verifyCodexPatchBtn").disabled = false;
   }
 }
@@ -1782,8 +1787,7 @@ async function saveArduinoWorkspace() {
 async function verifyArduinoWorkspace(source = verifySource()) {
   setOutputView("verify");
   renderVerifyOutput(null, "Copying sketch folder to sandbox and running arduino-cli compile...");
-  state.arduinoVerifyRunning = true;
-  $("#verifyArduinoBtn").disabled = true;
+  setArduinoVerifyRunning(true);
   try {
     const result = await api("/api/arduino_verify", {
       method: "POST",
@@ -1799,9 +1803,31 @@ async function verifyArduinoWorkspace(source = verifySource()) {
     await refresh();
     return result;
   } finally {
-    state.arduinoVerifyRunning = false;
-    $("#verifyArduinoBtn").disabled = false;
+    setArduinoVerifyRunning(false);
   }
+}
+
+function setArduinoVerifyRunning(running) {
+  state.arduinoVerifyRunning = Boolean(running);
+  $("#verifyArduinoBtn").disabled = state.arduinoVerifyRunning;
+  $("#cancelArduinoVerifyBtn").hidden = !state.arduinoVerifyRunning;
+  $("#cancelArduinoVerifyBtn").disabled = !state.arduinoVerifyRunning;
+}
+
+async function cancelArduinoVerify() {
+  const button = $("#cancelArduinoVerifyBtn");
+  button.disabled = true;
+  try {
+    await api("/api/arduino_verify_cancel", { method: "POST", body: "{}" });
+    $("#editorStatus").textContent = "Cancellation requested. Waiting for arduino-cli to stop.";
+  } catch (error) {
+    $("#editorStatus").textContent = `Could not cancel sandbox verification: ${error.message}`;
+  }
+}
+
+async function clearVerifyCache() {
+  const result = await api("/api/arduino_verify_cache_clear", { method: "POST", body: "{}" });
+  $("#editorStatus").textContent = `Cleared ${Number(result.cleared || 0)} cached verification result(s).`;
 }
 
 async function saveSettings() {
@@ -1877,6 +1903,10 @@ function bindEvents() {
     $("#environmentProfileStatus").textContent = error.message;
   }));
   $("#verifyArduinoBtn").addEventListener("click", () => verifyArduinoWorkspace());
+  $("#cancelArduinoVerifyBtn").addEventListener("click", cancelArduinoVerify);
+  $("#clearVerifyCacheBtn").addEventListener("click", () => clearVerifyCache().catch((error) => {
+    $("#editorStatus").textContent = `Could not clear verification cache: ${error.message}`;
+  }));
   $("#verifyOutputTab").addEventListener("click", () => setOutputView("verify"));
   $("#runHistoryTab").addEventListener("click", async () => {
     setOutputView("history");

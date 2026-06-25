@@ -218,7 +218,7 @@ Purpose: optimize and validate the completed Stage 0-8 Arduino foundation before
 
 - [x] [Stage 0] Add versioned configuration validation and migration/backup for user settings, workspace profiles, checkpoints, and run history so an update cannot silently discard local state.
 - [x] [Stage 1] Optimize Arduino window/process refresh with event assistance while retaining polling as the safe fallback for missed events.
-- [ ] [Stage 2] Optimize compile responsiveness with cancellation, workspace-hash caching, clear cache invalidation, and timing telemetry.
+- [x] [Stage 2] Optimize compile responsiveness with cancellation, workspace-hash caching, clear cache invalidation, and timing telemetry. `Verify Sandbox` exposes Cancel and Clear Cache controls; cached results are labelled, and source/profile/CLI changes generate a new cache key.
 - [ ] [Stage 3] Optimize Save File coordination with atomic writes and file-change debounce so Arduino IDE and Talos do not race during normal editing.
 - [ ] [Stage 4] Optimize Codex resilience with reconnect/retry status for transient app-server failures without replaying a user turn automatically.
 - [ ] [Stage 4] Expose a compact pre-send context preview that identifies the workspace map, active file, profile, and verify data included in each Codex turn.

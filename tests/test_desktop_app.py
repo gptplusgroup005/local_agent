@@ -10,6 +10,9 @@ from talos import core, native_bridge
 from talos import run_history as run_history_store
 from talos.arduino_events import ArduinoEventWatcher, is_arduino_window_title
 from talos.arduino import (
+    cached_compile_result,
+    clear_arduino_compile_cache,
+    compile_cache_key,
     boards_by_window_title,
     copy_workspace_to_sandbox,
     delete_workspace_file,
@@ -1106,6 +1109,30 @@ class TalosArduinoTests(unittest.TestCase):
             self.assertEqual(result["status"], "missing_fqbn")
             self.assertIn("prepare", result["timings"])
             self.assertIn("total", result["timings"])
+
+    def test_compile_cache_is_keyed_by_workspace_content_and_can_be_cleared(self) -> None:
+        clear_arduino_compile_cache()
+        with TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "Blink"
+            workspace.mkdir()
+            sketch = workspace / "Blink.ino"
+            sketch.write_text("void setup() {}\nvoid loop() {}\n", encoding="utf-8")
+            summary = {"fqbn": "arduino:avr:uno"}
+            profile = {"build_flags": [], "build_properties": []}
+
+            initial_key = compile_cache_key(workspace, summary, profile, "arduino-cli", None)
+            from talos.arduino import store_compile_result
+            store_compile_result(initial_key, {"ok": True, "status": "passed", "output": "ok"})
+            cached = cached_compile_result(initial_key)
+
+            self.assertTrue(cached["cache"]["hit"])
+            self.assertEqual(cached["output"], "ok")
+
+            sketch.write_text("void setup() { Serial.begin(9600); }\nvoid loop() {}\n", encoding="utf-8")
+            changed_key = compile_cache_key(workspace, summary, profile, "arduino-cli", None)
+            self.assertNotEqual(initial_key, changed_key)
+            self.assertEqual(clear_arduino_compile_cache(), 1)
+            self.assertIsNone(cached_compile_result(initial_key))
 
     def test_arduino_compile_output_parser_cleans_ansi_and_extracts_summary(self) -> None:
         output = (

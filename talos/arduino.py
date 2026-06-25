@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import copy
+import hashlib
+import os
 import shutil
 import subprocess
 import re
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -43,6 +47,13 @@ ARDUINO_CLI_CANDIDATES = [
     Path("C:/Program Files (x86)/Arduino IDE/resources/app/lib/backend/resources/arduino-cli.exe"),
 ]
 _ARDUINO_CLI_CACHE: str | None = None
+VERIFY_CACHE_TTL_SECONDS = 30.0
+VERIFY_CACHE_LIMIT = 12
+VERIFY_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+VERIFY_CACHE_LOCK = threading.Lock()
+ACTIVE_COMPILE_LOCK = threading.Lock()
+ACTIVE_COMPILE: subprocess.Popen[str] | None = None
+ACTIVE_COMPILE_CANCELLED = False
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 PROGRAM_MEMORY_RE = re.compile(
     r"Sketch uses\s+(?P<used>\d+)\s+bytes\s+\((?P<percent>\d+)%\).*?Maximum is\s+(?P<maximum>\d+)\s+bytes",
@@ -939,6 +950,86 @@ def parse_compile_output(output: str) -> dict[str, Any]:
         "issue_context": format_compile_issue_context(issues),
     }
 
+
+def compile_cache_key(
+    workspace: Path,
+    summary: dict[str, Any],
+    profile: dict[str, Any],
+    cli: str,
+    overrides: dict[str, str | None] | None,
+) -> str:
+    digest = hashlib.sha256()
+    digest.update(str(summary.get("fqbn") or "").encode("utf-8"))
+    digest.update(repr(profile.get("build_flags") or []).encode("utf-8"))
+    digest.update(repr(profile.get("build_properties") or []).encode("utf-8"))
+    try:
+        digest.update(f"{cli}:{Path(cli).stat().st_mtime_ns}".encode("utf-8"))
+    except OSError:
+        digest.update(cli.encode("utf-8"))
+    for path in iter_source_files(workspace):
+        relative = path.relative_to(workspace).as_posix()
+        digest.update(relative.encode("utf-8"))
+        try:
+            digest.update(path.read_bytes())
+        except OSError:
+            digest.update(b"<unreadable>")
+    for path, content in sorted((overrides or {}).items()):
+        digest.update(f"override:{path}".encode("utf-8"))
+        digest.update(b"<deleted>" if content is None else content.encode("utf-8"))
+    return digest.hexdigest()
+
+
+def cached_compile_result(cache_key: str, lookup_seconds: float = 0.0) -> dict[str, Any] | None:
+    with VERIFY_CACHE_LOCK:
+        item = VERIFY_CACHE.get(cache_key)
+        if item is None:
+            return None
+        created_at, result = item
+        age = time.monotonic() - created_at
+        if age > VERIFY_CACHE_TTL_SECONDS:
+            VERIFY_CACHE.pop(cache_key, None)
+            return None
+    cached = copy.deepcopy(result)
+    cached["cache"] = {"hit": True, "age_seconds": round(age, 3), "key": cache_key[:12]}
+    cached["timings"] = {"cache_lookup": round(lookup_seconds, 3), "total": round(lookup_seconds, 3)}
+    return cached
+
+
+def store_compile_result(cache_key: str, result: dict[str, Any]) -> None:
+    if not result.get("ok"):
+        return
+    cached = copy.deepcopy(result)
+    cached.pop("cache", None)
+    with VERIFY_CACHE_LOCK:
+        VERIFY_CACHE[cache_key] = (time.monotonic(), cached)
+        while len(VERIFY_CACHE) > VERIFY_CACHE_LIMIT:
+            VERIFY_CACHE.pop(next(iter(VERIFY_CACHE)))
+
+
+def clear_arduino_compile_cache() -> int:
+    with VERIFY_CACHE_LOCK:
+        count = len(VERIFY_CACHE)
+        VERIFY_CACHE.clear()
+    return count
+
+
+def cancel_arduino_compile() -> dict[str, Any]:
+    global ACTIVE_COMPILE_CANCELLED
+    with ACTIVE_COMPILE_LOCK:
+        process = ACTIVE_COMPILE
+        if process is None or process.poll() is not None:
+            return {"ok": False, "active": False, "message": "No Arduino compile is running."}
+        ACTIVE_COMPILE_CANCELLED = True
+        pid = process.pid
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, timeout=5)
+        else:
+            process.terminate()
+    except (OSError, subprocess.TimeoutExpired):
+        process.terminate()
+    return {"ok": True, "active": True, "message": "Arduino compile cancellation requested."}
+
 def run_arduino_compile(
     config: dict[str, Any],
     timeout: int = 120,
@@ -978,6 +1069,13 @@ def run_arduino_compile(
             "output": "arduino-cli was not found in PATH or in the Arduino IDE bundled resources folder.",
         })
     workspace = Path(summary["path"])
+    profile = environment_profile(config, str(summary.get("path") or ""))
+    cache_key = compile_cache_key(workspace, summary, profile, cli, overrides)
+    cache_lookup_started_at = time.perf_counter()
+    cached = cached_compile_result(cache_key, time.perf_counter() - cache_lookup_started_at)
+    step_started_at = mark("cache_lookup", step_started_at)
+    if cached is not None:
+        return cached
     sandbox = copy_workspace_to_sandbox(workspace)
     for relative_path, content in (overrides or {}).items():
         target = (sandbox / relative_path).resolve()
@@ -1005,25 +1103,50 @@ def run_arduino_compile(
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8", newline="\n")
     step_started_at = mark("sandbox_copy", step_started_at)
-    profile = environment_profile(config, str(summary.get("path") or ""))
     command = [cli, "compile", "--fqbn", summary["fqbn"]]
     if profile["build_flags"]:
         command.extend(["--build-property", f"compiler.cpp.extra_flags={' '.join(profile['build_flags'])}"])
     for build_property in profile["build_properties"]:
         command.extend(["--build-property", build_property])
     command.append(str(sandbox))
+    global ACTIVE_COMPILE, ACTIVE_COMPILE_CANCELLED
+    with ACTIVE_COMPILE_LOCK:
+        if ACTIVE_COMPILE is not None and ACTIVE_COMPILE.poll() is None:
+            return with_total({
+                "ok": False,
+                "status": "busy",
+                "summary": summary,
+                "sandbox": str(sandbox),
+                "command": " ".join(command),
+                "output": "Another Arduino compile is already running.",
+            })
+        ACTIVE_COMPILE_CANCELLED = False
+        try:
+            ACTIVE_COMPILE = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                cwd=sandbox,
+            )
+        except OSError as error:
+            ACTIVE_COMPILE = None
+            return with_total({
+                "ok": False,
+                "status": "launch_failed",
+                "summary": summary,
+                "sandbox": str(sandbox),
+                "command": " ".join(command),
+                "output": f"Could not start arduino-cli: {error}",
+            })
+        process = ACTIVE_COMPILE
     try:
-        completed = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            cwd=sandbox,
-        )
-        step_started_at = mark("compile", step_started_at)
-    except subprocess.TimeoutExpired as exc:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        stdout, stderr = process.communicate()
         mark("compile", step_started_at)
-        parsed = parse_compile_output("\n".join(part for part in (exc.stdout, exc.stderr) if part))
+        parsed = parse_compile_output("\n".join(part for part in (stdout, stderr) if part))
         return with_total({
             "ok": False,
             "status": "timeout",
@@ -1037,20 +1160,32 @@ def run_arduino_compile(
             "issues": parsed["issues"],
             "issue_context": parsed["issue_context"],
         })
-    output = "\n".join(part.strip() for part in (completed.stdout, completed.stderr) if part and part.strip())
+    finally:
+        with ACTIVE_COMPILE_LOCK:
+            cancelled = ACTIVE_COMPILE_CANCELLED
+            ACTIVE_COMPILE = None
+            ACTIVE_COMPILE_CANCELLED = False
+    step_started_at = mark("compile", step_started_at)
+    output = "\n".join(part.strip() for part in (stdout, stderr) if part and part.strip())
     parsed = parse_compile_output(output)
     mark("parse_output", step_started_at)
-    return with_total({
-        "ok": completed.returncode == 0,
-        "status": "passed" if completed.returncode == 0 else "failed",
-        "returncode": completed.returncode,
+    result = with_total({
+        "ok": process.returncode == 0 and not cancelled,
+        "status": "cancelled" if cancelled else "passed" if process.returncode == 0 else "failed",
+        "returncode": process.returncode,
         "summary": summary,
         "sandbox": str(sandbox),
         "command": " ".join(command),
-        "output": parsed["output"] or f"arduino-cli exited with code {completed.returncode}.",
+        "output": (
+            parsed["output"]
+            or ("Arduino compile cancelled." if cancelled else f"arduino-cli exited with code {process.returncode}.")
+        ),
         "memory": parsed["memory"],
         "libraries": parsed["libraries"],
         "platforms": parsed["platforms"],
         "issues": parsed["issues"],
         "issue_context": parsed["issue_context"],
+        "cache": {"hit": False, "key": cache_key[:12]},
     })
+    store_compile_result(cache_key, result)
+    return result
