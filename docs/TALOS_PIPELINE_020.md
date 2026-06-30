@@ -67,14 +67,16 @@ Exit condition: the repository has a version-specific 0.1.0 history pipeline and
 
 Purpose: prove that the current app can be built, installed, launched, and uninstalled outside the development folder before deeper 0.2.0 reliability work begins.
 
-- [ ] Build a clean release folder without `-AllowDirty`.
-- [ ] Build the Windows installer from the clean release output.
-- [ ] Record signing status as signed or explicit unsigned Beta.
-- [ ] Run installer install/uninstall smoke and record `installer_smoke.json`.
-- [ ] Run installed-app smoke outside the source tree and record `installed_app_smoke.json`.
+- [x] Build a clean release folder without `-AllowDirty`.
+- [x] Build the Windows installer from the clean release output.
+- [x] Record signing status as signed or explicit unsigned Beta.
+- [x] Run installer install/uninstall smoke and record `installer_smoke.json`.
+- [x] Run installed-app smoke outside the source tree and record `installed_app_smoke.json`.
 - [ ] Generate `DISTRIBUTION_CHECKLIST.md` with `-RequireReady`.
-- [ ] Confirm `desktop_app.py` still launches the source app for debug.
-- [ ] Record packaging/runtime issues found during release-candidate validation.
+- [x] Confirm `desktop_app.py` still launches the source app for debug.
+- [x] Record packaging/runtime issues found during release-candidate validation.
+
+Stage evidence: `docs/TALOS_020_STAGE1_VALIDATION.md`.
 
 Exit condition: the app can be installed and launched outside the source tree, uninstalled cleanly, and represented by complete release evidence.
 

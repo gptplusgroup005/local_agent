@@ -23,6 +23,40 @@ function Invoke-ProcessChecked([string]$FilePath, [string[]]$ArgumentList, [stri
   }
 }
 
+function Stop-InstalledTalos([object]$Process, [string]$InstallDir) {
+  if ($Process -and -not $Process.HasExited) {
+    Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
+    Wait-Process -Id $Process.Id -Timeout 5 -ErrorAction SilentlyContinue
+  }
+
+  $escapedInstallDir = [System.IO.Path]::GetFullPath($InstallDir)
+  Get-Process -Name $script:appName -ErrorAction SilentlyContinue |
+    Where-Object {
+      $_.Path -and [System.IO.Path]::GetFullPath($_.Path).StartsWith($escapedInstallDir)
+    } |
+    ForEach-Object {
+      Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+      Wait-Process -Id $_.Id -Timeout 5 -ErrorAction SilentlyContinue
+    }
+}
+
+function Remove-TreeWithRetry([string]$Path) {
+  if (-not (Test-Path -LiteralPath $Path)) {
+    return
+  }
+  for ($attempt = 1; $attempt -le 8; $attempt++) {
+    try {
+      Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+      return
+    } catch {
+      if ($attempt -eq 8) {
+        throw
+      }
+      Start-Sleep -Milliseconds (250 * $attempt)
+    }
+  }
+}
+
 function Wait-TalosHealth([int]$TimeoutSeconds) {
   $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
   while ((Get-Date) -lt $deadline) {
@@ -156,19 +190,17 @@ try {
   Write-Host "Installed app smoke evidence:"
   Write-Host $evidencePath
 } finally {
-  if ($appProcess -and -not $appProcess.HasExited) {
-    Stop-Process -Id $appProcess.Id -Force
-  }
+  Stop-InstalledTalos $appProcess $installDir
   $env:TALOS_APP_DATA_DIR = $oldAppData
   if (-not $KeepInstalled) {
     if (Test-Path -LiteralPath $uninstaller) {
       Invoke-ProcessChecked $uninstaller @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") "Smoke uninstall"
     }
     if (Test-Path -LiteralPath $installDir) {
-      Remove-Item -LiteralPath $installDir -Recurse -Force
+      Remove-TreeWithRetry $installDir
     }
     if (Test-Path -LiteralPath $appDataDir) {
-      Remove-Item -LiteralPath $appDataDir -Recurse -Force
+      Remove-TreeWithRetry $appDataDir
     }
   }
 }

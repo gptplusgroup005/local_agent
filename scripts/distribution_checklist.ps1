@@ -96,7 +96,7 @@ $hasExecutable = @($artifacts | Where-Object { $_.type -eq "windows-executable" 
 $hasInstaller = @($artifacts | Where-Object { $_.type -eq "windows-installer" }).Count -gt 0
 $signingReady = $false
 if ($signing) {
-  $signingReady = [bool]$signing.allow_unsigned_beta -or [string]$signing.status -eq "signed"
+  $signingReady = [bool]$signing.signed -or [string]$signing.status -eq "signed" -or [string]$signing.status -eq "unsigned-beta"
 }
 $installerSmokeReady = $installerSmoke -and [string]$installerSmoke.status -eq "passed"
 $installedAppSmokeReady = $installedAppSmoke -and ([string]$installedAppSmoke.status -eq "passed" -or [string]$installedAppSmoke.status -eq "manual-confirmed-without-launch-check")
